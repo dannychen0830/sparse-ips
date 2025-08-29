@@ -105,16 +105,13 @@ class ParticleSystem:
         # get neighbors edge type
         neighbors_edge_type = None \
             if self.edge_type is None \
-            else [self.edge_type[(node, neighbor)] for neighbor in self.graph.neighbors(node)]
+            else [self.edge_type[tuple(sorted((node, neighbor)))] for neighbor in self.graph.neighbors(node)]
         # get global neighborhood empirical measure in the form of dictionary
         if self.global_interaction:
             global_empirical_measure = {neighborhood: 0 for neighborhood in self.neighborhood_state_space}
             for vertex in range(self.num_particles):
                 neighborhood = (current_config[vertex],) + tuple(current_config[neighbor] for neighbor in self.graph.neighbors(vertex))
-                try:
-                    global_empirical_measure[neighborhood] += 1 / self.num_particles
-                except KeyError:
-                    pass
+                global_empirical_measure[neighborhood] = global_empirical_measure.get(neighborhood, 1 / self.num_particles)
         else:
             global_empirical_measure = None
 
