@@ -219,9 +219,6 @@ def simulate_markov_lfe(
                 return numerator / denominator if denominator > 0 else 0
 
     def mlfe_ode(t, p):
-        # sum p to check normalization
-        total_prob = sum(p)
-
         # convert p to dictionary from ode_state_space to probabilities
         marginal_prob = {ode_state_space[i]: p[i] for i in range(len(ode_state_space))}
 

@@ -282,15 +282,13 @@ def plot_ensemble_state_probabilities(
 
     # Plot the mean empirical probabilities as step functions with error bands
     for s_idx, state in enumerate(ips.state_space):
-        line = ax.step(time_points, mean_probabilities[s_idx], where='post',
-                       color=colors[s_idx], label=labels[s_idx], alpha=0.8)
+        line = ax.plot(time_points, mean_probabilities[s_idx], color=colors[s_idx], label=labels[s_idx], alpha=0.8)
 
         # Add error bands (2 standard deviations)
         lower_bound = np.maximum(0, mean_probabilities[s_idx] - 2 * std_probabilities[s_idx])
         upper_bound = np.minimum(1, mean_probabilities[s_idx] + 2 * std_probabilities[s_idx])
 
-        ax.fill_between(time_points, lower_bound, upper_bound,
-                        step='post', alpha=0.2, color=colors[s_idx])
+        ax.fill_between(time_points, lower_bound, upper_bound, alpha=0.2, color=colors[s_idx])
 
     # Add legend, labels, and title
     ax.set_xlabel('Time')

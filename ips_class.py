@@ -91,7 +91,7 @@ class ParticleSystem:
             self.vertex_type = {node: vertex_type_func() for node in self.graph.nodes()}
         # renew edge type
         if self.edge_type is not None:
-            self.edge_type = {(u, v): edge_type_func() for u, v in self.graph.edges()}
+            self.edge_type = {tuple(sorted((u, v))): edge_type_func() for u, v in self.graph.edges()}
 
         return self
 
