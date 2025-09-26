@@ -111,7 +111,10 @@ class ParticleSystem:
             global_empirical_measure = {neighborhood: 0 for neighborhood in self.neighborhood_state_space}
             for vertex in range(self.num_particles):
                 neighborhood = (current_config[vertex],) + tuple(current_config[neighbor] for neighbor in self.graph.neighbors(vertex))
-                global_empirical_measure[neighborhood] = global_empirical_measure.get(neighborhood, 1 / self.num_particles)
+                try:
+                    global_empirical_measure[neighborhood] += 1 / self.num_particles
+                except KeyError:
+                    pass
         else:
             global_empirical_measure = None
 
