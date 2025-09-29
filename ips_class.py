@@ -25,10 +25,9 @@ class ParticleSystem:
         self.state_space = state_space
         self.graph = graph
         self.deg_dist = deg_dist
-        if deg_dist is None:
-            deg_supp = None
-        else:
-            deg_supp = [i for (i, p) in deg_dist.items() if p > 0]
+        if self.deg_dist is None:
+            self.deg_dist = self.get_empirical_degree_distribution()
+            deg_supp = [i for (i, p) in self.deg_dist.items() if p > 0]
         self.neighborhood_state_space = [(root,) + children for k in deg_supp for (root, children) in
                               product(self.state_space, product(self.state_space, repeat=k))]
 
@@ -111,7 +110,10 @@ class ParticleSystem:
             global_empirical_measure = {neighborhood: 0 for neighborhood in self.neighborhood_state_space}
             for vertex in range(self.num_particles):
                 neighborhood = (current_config[vertex],) + tuple(current_config[neighbor] for neighbor in self.graph.neighbors(vertex))
-                global_empirical_measure[neighborhood] = global_empirical_measure.get(neighborhood, 1 / self.num_particles)
+                try:
+                    global_empirical_measure[neighborhood] += 1 / self.num_particles
+                except KeyError:
+                    pass
         else:
             global_empirical_measure = None
 
