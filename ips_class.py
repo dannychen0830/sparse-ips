@@ -27,7 +27,7 @@ class ParticleSystem:
         self.deg_dist = deg_dist
         if self.deg_dist is None:
             self.deg_dist = self.get_empirical_degree_distribution()
-            deg_supp = [i for (i, p) in self.deg_dist.items() if p > 0]
+        deg_supp = [i for (i, p) in self.deg_dist.items() if p > 0]
         self.neighborhood_state_space = [(root,) + children for k in deg_supp for (root, children) in
                               product(self.state_space, product(self.state_space, repeat=k))]
 
