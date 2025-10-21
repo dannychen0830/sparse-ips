@@ -67,23 +67,33 @@ class ParticleSystem:
 
         return deg_dist
 
-    def renew_graph(self, seed: int, vertex_type_func: Callable = None, edge_type_func: Callable = None, edge_state_func: Callable = None, edge_rate_func: Callable = None):
-        # sample a new graph according to deg distribution
-
-        if self.deg_dist is None:
-            self.get_empirical_degree_distribution()
-
+    @staticmethod
+    def sample_graph_from_deg_dist(deg_dist, num_particles, seed):
         # set seed
         np.random.seed(seed)
         # construct degree sequence by sampling iid from degree distribution
-        deg_seq = [np.random.choice(list(self.deg_dist.keys()), p=list(self.deg_dist.values())) for _ in range(self.num_particles)]
+        deg_seq = [
+            np.random.choice(list(deg_dist.keys()), p=list(deg_dist.values()))
+            for _ in range(num_particles)
+        ]
+        # ensure sum of degrees is even
+        if sum(deg_seq) % 2 != 0:
+            deg_seq[0] += 1
 
         # draw configuration model with specified degree distribution
         new_graph = nx.configuration_model(deg_seq, seed=seed)
         new_graph = nx.Graph(new_graph)  # convert to simple graph
         new_graph.remove_edges_from(nx.selfloop_edges(new_graph))  # remove self-loops
 
-        self.graph = new_graph
+        return new_graph
+
+    def renew_graph(self, seed: int, vertex_type_func: Callable = None, edge_type_func: Callable = None, edge_state_func: Callable = None, edge_rate_func: Callable = None):
+        # sample a new graph according to deg distribution
+
+        if self.deg_dist is None:
+            self.get_empirical_degree_distribution()
+
+        self.graph = ParticleSystem.sample_graph_from_deg_dist(self.deg_dist, self.num_particles, seed)
 
         # renew vertex type
         if self.vertex_type is not None:
