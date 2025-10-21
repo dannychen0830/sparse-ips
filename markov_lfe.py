@@ -133,7 +133,7 @@ def one_coordinate_apart(tuple1: Tuple, tuple2: Tuple) -> bool:
     :param tuple2: second input tuple
     :return: True if the tuples differ in exactly one coordinate, False otherwise
     """
-    return sum(x != y for x, y in zip(tuple1, tuple2)) == 1
+    return len(tuple1) == len(tuple2) and sum(x != y for x, y in zip(tuple1, tuple2)) == 1
 
 
 def simulate_markov_lfe(
@@ -147,7 +147,7 @@ def simulate_markov_lfe(
 ) -> Tuple[np.ndarray, np.ndarray, Dict[int, Tuple[Any]]]:
     # model parameters
     deg_dist = ips.get_empirical_degree_distribution()
-    deg_supp = [i for (i,p) in deg_dist.items() if p > 0]
+    deg_supp = [i for (i,p) in deg_dist.items() if p >= 0]
 
     # track all possible root-children marginals
     if ips.vertex_type_space is None and ips.edge_type_space is None:
@@ -171,13 +171,13 @@ def simulate_markov_lfe(
         if ips.vertex_type_space is None and ips.edge_type_space is None:
             def gamma(source: Tuple, target: Tuple, root_state, one_state, marginal_prob: Dict[Tuple, float], **kwargs) -> float:
                 numerator = sum(
-                    (2 + len(remaining_state)) *
+                    (1 + len(remaining_state)) *
                     marginal_prob[(root_state, one_state) + remaining_state] *
                     ips.rate(source, target, (one_state, ) + remaining_state, global_empirical_measure=marginal_prob if ips.global_interaction else None)
                     for k in deg_supp for remaining_state in product(ips.state_space, repeat=k-1)
                                 )
                 denominator = sum(
-                    (2 + len(remaining_state)) * marginal_prob[(root_state, one_state) + remaining_state]
+                    (1 + len(remaining_state)) * marginal_prob[(root_state, one_state) + remaining_state]
                     for k in deg_supp for remaining_state in product(ips.state_space, repeat=k-1)
                 )
                 return numerator / denominator if denominator > 0 else 0

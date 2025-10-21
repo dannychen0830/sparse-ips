@@ -80,6 +80,10 @@ class ParticleSystem:
         if sum(deg_seq) % 2 != 0:
             deg_seq[0] += 1
 
+        # check if sum of degree sequence is even, if not, make it even
+        if sum(deg_seq) % 2 != 0:
+            deg_seq[0] += 1
+
         # draw configuration model with specified degree distribution
         new_graph = nx.configuration_model(deg_seq, seed=seed)
         new_graph = nx.Graph(new_graph)  # convert to simple graph

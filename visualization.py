@@ -10,6 +10,10 @@ from matplotlib.pyplot import cm
 from collections import Counter
 
 
+def get_color(idx, num_colors=10):
+    return cm.tab10(np.linspace(0, 1, num_colors)) if idx is None else cm.tab10(np.linspace(0, 1, num_colors))[idx]
+
+
 def plot_particle_trajectories(
         jumps: List[Tuple[int, float, Tuple[Any, Any]]],
         graph: nx.Graph,
@@ -248,7 +252,7 @@ def plot_ensemble_state_probabilities(
 
     # Set default colors if not provided
     if colors is None:
-        colors = cm.tab10(np.linspace(0, 1, len(ips.state_space)))
+        colors = get_color(None, max(len(ips.state_space), 10))
 
     # Set default labels if not provided
     if labels is None:
@@ -307,156 +311,3 @@ def plot_ensemble_state_probabilities(
     ax.grid(True, alpha=0.3)
 
     return fig, ax
-
-
-def animate_particle_process(
-        jumps: List[Tuple[int, float, Tuple[Any, Any]]],
-        graph: nx.Graph,
-        state_space: List[Any],
-        initial_conditions: Dict[int, Any],
-        max_time: float,
-        state_colors: Dict = None,
-        node_positions: Dict = None,
-        show_animation: bool = True,
-        fps: int = 10,
-        num_frames: int = 100,
-        save_path: str = None,
-        figsize: Tuple[int, int] = (8, 6)
-) -> None:
-    """
-    Create an animation of particles evolving on a graph.
-
-    Parameters:
-    -----------
-    jumps : List[Tuple[int, float, Tuple[Any, Any]]]
-        Output from simulate_jump_process function
-    graph : nx.Graph
-        The graph structure used in the simulation
-    state_space : List[Any]
-        List of possible states a particle can take
-    initial_conditions : Dict[int, Any]
-        Dictionary mapping node indices to their initial states
-    max_time : float
-        Maximum simulation time
-    state_colors : Dict, optional
-        Dictionary mapping states to colors
-    node_positions : Dict, optional
-        Dictionary mapping node indices to (x,y) positions
-    show_animation : bool, optional
-        If True, display the animation
-    fps : int, optional
-        Frames per second in the animation
-    num_frames : int, optional
-        Number of frames in the animation
-    save_path : str, optional
-        If provided, save the animation to this path
-    figsize : Tuple[int, int], optional
-        Figure size
-    """
-    # If no state colors are provided, generate them
-    if state_colors is None:
-        colors = ['#e41a1c', '#377eb8', '#4daf4a', '#984ea3', '#ff7f00', '#ffff33',
-                  '#a65628', '#f781bf', '#999999', '#66c2a5', '#fc8d62', '#8da0cb']
-        state_colors = {state: colors[i % len(colors)] for i, state in enumerate(state_space)}
-
-    # If no node positions are provided, generate them
-    if node_positions is None:
-        node_positions = nx.spring_layout(graph, seed=42)
-
-    # Organize jumps by vertex
-    vertex_jumps = defaultdict(list)
-    for vertex, time, transition in jumps:
-        vertex_jumps[vertex].append((time, transition))
-
-    # Create time series of states for each vertex
-    vertex_states = {}
-    for vertex in graph.nodes():
-        # Start with initial state
-        state_history = [(0, initial_conditions[vertex])]
-
-        # Add all transitions
-        for time, (_, target_state) in vertex_jumps[vertex]:
-            state_history.append((time, target_state))
-
-        # End with final state at max_time
-        if state_history[-1][0] < max_time:
-            state_history.append((max_time, state_history[-1][1]))
-
-        vertex_states[vertex] = state_history
-
-    # Create figure and axis
-    fig, ax = plt.subplots(figsize=figsize)
-    plt.close()  # We'll display the animation separately
-
-    # Function to get states at a given time
-    def get_states_at_time(t):
-        current_states = {}
-        for vertex, state_history in vertex_states.items():
-            # Find the state at time t
-            idx = 0
-            while idx < len(state_history) - 1 and state_history[idx + 1][0] <= t:
-                idx += 1
-            current_states[vertex] = state_history[idx][1]
-        return current_states
-
-    # For large graphs, adjust node size
-    node_size = 500 if len(graph.nodes()) <= 25 else max(50, 2000 // len(graph.nodes()))
-    font_size = 10 if len(graph.nodes()) <= 25 else max(4, 200 // len(graph.nodes()))
-
-    # Animation initialization function
-    def init():
-        ax.clear()
-        ax.set_title('Time: 0.00')
-        ax.axis('off')
-        return []
-
-    # Animation update function
-    def update(frame):
-        ax.clear()
-        t = frame * max_time / (num_frames - 1)
-        current_states = get_states_at_time(t)
-
-        # Draw graph with node colors based on states
-        node_colors = [state_colors[current_states[n]] for n in graph.nodes()]
-
-        nx.draw_networkx(
-            graph,
-            pos=node_positions,
-            node_color=node_colors,
-            with_labels=len(graph.nodes()) <= 100,
-            node_size=node_size,
-            font_size=font_size,
-            font_weight='bold',
-            font_color='black',
-            edge_color='gray',
-            width=0.5,
-            alpha=0.8,
-            ax=ax
-        )
-
-        # Create a small custom legend for the states
-        handles = [plt.Line2D([0], [0], marker='o', color='w',
-                              markerfacecolor=state_colors[s], markersize=10, label=f'State {s}')
-                   for s in state_space]
-        ax.legend(handles=handles, loc='upper right', framealpha=0.7)
-
-        ax.set_title(f'Time: {t:.2f}')
-        ax.axis('off')
-        return []
-
-    # Create animation
-    ani = animation.FuncAnimation(fig, update, frames=num_frames,
-                                  init_func=init, blit=True, interval=1000 / fps)
-
-    # Save animation if requested
-    if save_path:
-        Writer = animation.writers['ffmpeg'] if 'ffmpeg' in animation.writers.list() else animation.writers['pillow']
-        writer = Writer(fps=fps)
-        ani.save(save_path, writer=writer)
-        print(f"Animation saved to {save_path}")
-
-    # Display animation
-    if show_animation:
-        plt.show()
-
-    return ani
