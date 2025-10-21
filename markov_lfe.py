@@ -147,7 +147,7 @@ def simulate_markov_lfe(
 ) -> Tuple[np.ndarray, np.ndarray, Dict[int, Tuple[Any]]]:
     # model parameters
     deg_dist = ips.get_empirical_degree_distribution()
-    deg_supp = [i for (i,p) in deg_dist.items() if p >= 0]
+    deg_supp = [i for (i,p) in deg_dist.items() if p > 0]
 
     # track all possible root-children marginals
     if ips.vertex_type_space is None and ips.edge_type_space is None:

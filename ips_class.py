@@ -76,10 +76,6 @@ class ParticleSystem:
             np.random.choice(list(deg_dist.keys()), p=list(deg_dist.values()))
             for _ in range(num_particles)
         ]
-        # ensure sum of degrees is even
-        if sum(deg_seq) % 2 != 0:
-            deg_seq[0] += 1
-
         # check if sum of degree sequence is even, if not, make it even
         if sum(deg_seq) % 2 != 0:
             deg_seq[0] += 1
