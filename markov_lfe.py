@@ -157,7 +157,7 @@ def simulate_markov_lfe(
     elif ips.vertex_type_space is not None and ips.edge_type_space is None:
         vertex_state_space = [(root,) + children for k in deg_supp for (root, children) in product(ips.state_space, product(ips.state_space, repeat=k))]
         vertex_type_space = [(root,) + children for k in deg_supp for (root, children) in product(ips.vertex_type_space, product(ips.vertex_type_space, repeat=k))]
-        ode_state_space = [(state, type) for state in vertex_state_space for type in vertex_type_space]
+        ode_state_space = [(state, type) for state in vertex_state_space for type in vertex_type_space if len(state) == len(type)]
 
     elif ips.vertex_type_space is None and ips.edge_type_space is not None:
         vertex_state_space = [(root,) + children for k in deg_supp for (root, children) in product(ips.state_space, product(ips.state_space, repeat=k))]
@@ -187,7 +187,9 @@ def simulate_markov_lfe(
                 numerator = sum(
                     (2 + len(remaining_state)) *
                     marginal_prob[((root_state, one_state) + remaining_state, (root_type, one_type) + remaining_type)]
-                    * ips.rate(source, target, (one_state,) + remaining_state, neighbors_vertex_type=(root_type, one_type) + remaining_type)
+                    * ips.rate(source, target, (one_state,) + remaining_state,
+                               neighbors_vertex_type=(root_type, one_type) + remaining_type,
+                               global_empirical_measure=marginal_prob if ips.global_interaction else None)
                     for k in deg_supp
                     for remaining_state in product(ips.state_space, repeat=k-1)
                     for remaining_type in product(ips.vertex_type_space, repeat=k-1)
@@ -205,7 +207,9 @@ def simulate_markov_lfe(
                 numerator = sum(
                     (2 + len(remaining_state)) *
                     marginal_prob[((root_state, one_state) + remaining_state, (root_one_type,) + remaining_type)]
-                    * ips.rate(source, target, (one_state,) + remaining_state, neighbors_edge_type=(root_one_type,) + remaining_type)
+                    * ips.rate(source, target, (one_state,) + remaining_state,
+                               neighbors_edge_type=(root_one_type,) + remaining_type,
+                               global_empirical_measure=marginal_prob if ips.global_interaction else None)
                     for k in deg_supp
                     for remaining_state in product(ips.state_space, repeat=k-1)
                     for remaining_type in product(ips.edge_type_space, repeat=k-1)
@@ -240,7 +244,11 @@ def simulate_markov_lfe(
                 elif ips.vertex_type_space is not None and ips.edge_type_space is None:
                     for neighborhood_type in product(ips.vertex_type_space, repeat=len(source)):
                         if changed_index == 0:
-                            ode_rate[(source, target, neighborhood_type)] = ips.rate(source[0], target[0], source[1:], neighbors_vertex_type=neighborhood_type)
+                            ode_rate[(source, target, neighborhood_type)] = ips.rate(source[0],
+                                                                                     target[0],
+                                                                                     source[1:],
+                                                                                     neighbors_vertex_type=neighborhood_type,
+                                                                                     global_empirical_measure=marginal_prob if ips.global_interaction else None)
                         else:
                             ode_rate[(source, target, neighborhood_type)] = gamma(source[changed_index],
                                                                                   target[changed_index],
@@ -252,7 +260,11 @@ def simulate_markov_lfe(
                 elif ips.vertex_type_space is None and ips.edge_type_space is not None:
                     for neighborhood_type in product(ips.edge_type_space, repeat=len(source)-1):
                         if changed_index == 0:
-                            ode_rate[(source, target, neighborhood_type)] = ips.rate(source[0], target[0], source[1:], neighbors_edge_type=neighborhood_type)
+                            ode_rate[(source, target, neighborhood_type)] = ips.rate(source[0],
+                                                                                     target[0],
+                                                                                     source[1:],
+                                                                                     neighbors_edge_type=neighborhood_type,
+                                                                                     global_empirical_measure=marginal_prob if ips.global_interaction else None)
                         else:
                             ode_rate[(source, target, neighborhood_type)] = gamma(source[changed_index],
                                                                                   target[changed_index],
