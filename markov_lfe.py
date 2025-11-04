@@ -162,7 +162,7 @@ def simulate_markov_lfe(
     elif ips.vertex_type_space is None and ips.edge_type_space is not None:
         vertex_state_space = [(root,) + children for k in deg_supp for (root, children) in product(ips.state_space, product(ips.state_space, repeat=k))]
         edge_type_space = [children for k in deg_supp for (root, children) in product(ips.edge_type_space, product(ips.edge_type_space, repeat=k))]
-        ode_state_space = [(state, type) for state in vertex_state_space for type in edge_type_space]
+        ode_state_space = [(state, type) for state in vertex_state_space for type in edge_type_space if len(state) == len(type) + 1]
 
     index_to_ode_state_space = {i: state for i, state in enumerate(ode_state_space)}
 
@@ -287,8 +287,8 @@ def simulate_markov_lfe(
 
             dp[i] = flux_in - flux_out
 
-        # # timestamp with datetime
-        # print(f'******integration time: {t},   timestamp: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}')
+        # timestamp with datetime
+        print(f'******integration time: {t},   timestamp: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}')
         return dp
 
     # calculate initial conditions on ode_state_space given i.i.d. initial conditions on vertices
@@ -314,7 +314,7 @@ def simulate_markov_lfe(
     # solve the ode
     t_span = (0, max_time)
     t_eval = np.linspace(0, max_time, num_grid_points)
-    sol = solve_ivp(mlfe_ode, t_span, ode_init, t_eval=t_eval, method='RK45')
+    sol = solve_ivp(mlfe_ode, t_span, ode_init, t_eval=t_eval, method='RK23')
 
     return t_eval, sol.y, index_to_ode_state_space
 
