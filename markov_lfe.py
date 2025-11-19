@@ -8,122 +8,123 @@ from collections import Counter
 from datetime import datetime
 
 
-def jump_rate_for_red_mlfe(
-        state_space: List[Any],
-        state_to_index: Dict[Any, int],
-        b: Dict[Tuple[Any, Any], float],
-        rho: Dict[Tuple[Any, Any], float]
-) -> Callable:
-    # define the rate function to be returned
-    def rate(source_state, target_state, neighbors_state, **kwargs):
-        # check if source_state is the zero state
-        if state_to_index[source_state] == 0:
-            return sum(b[(a, target_state)] * sum(1 for state in neighbors_state if state == a) for a in state_space)
-        # if not, transition is independent of neighbor states
-        else:
-            return rho[(source_state, target_state)]
-
-    return rate
-
-
-def simulate_reduced_markov_lfe(
-        state_space: List[Any],
-        state_to_index: Dict[Any, int],
-        b: Dict[Tuple[Any, Any], float],
-        rho: Dict[Tuple[Any, Any], float],
-        deg_dist: List[float],
-        phi: Callable[[float], float],
-        max_time: float,
-        initial_conditions: Dict[Any, float],
-        num_grid_points: int = 100
-):
-    # define simulation parameters
-    num_states = len(state_space)
-    deg_supp = [i for (i,p) in enumerate(deg_dist) if p > 0]
-    deg_dist_no_zero = np.array([p for p in deg_dist if p > 0])
-    initial_conditions_array = np.array([v for v in initial_conditions.values()])
-
-    # initial condition for f_0, f_a for a = {1, ..., m}
-    f = initial_conditions_array
-    # initial condition for F
-    F = np.array([0.0])
-    # initial condition for P_0,0;k = 1 for k such that theta(k) > 0
-    # initial condition for P_0,a;k = 0 for a > 0 and k such that theta(k) > 0 is 0.0
-    p0ak = np.zeros(shape=(num_states, len(deg_supp)))
-    p0ak[0, :] = 1.0
-    # initial condition for P_a,c
-    pac = np.eye(num_states - 1)
-
-    ode_initial_conditions = np.concatenate((f, F, p0ak.flatten(), pac.flatten()))
-
-    # convert beta and rho from dictionary to numpy array
-    b_mat = np.zeros(shape=(num_states, num_states))
-    rho_mat = np.zeros(shape=(num_states, num_states))
-    for i in state_space:
-        for j in state_space:
-            try:
-                b_mat[state_to_index[i], state_to_index[j]] = b[(i,j)]
-            except KeyError:
-                b_mat[state_to_index[i], state_to_index[j]] = 0.0
-            try:
-                rho_mat[state_to_index[i], state_to_index[j]] = rho[(i,j)]
-            except KeyError:
-                rho_mat[state_to_index[i], state_to_index[j]] = 0.0
-    # diagonal of rho is negative row sum
-    for i in range(num_states):
-        rho_mat[i,i] = -np.sum(rho_mat[i,:])
-    b_vec = np.sum(b_mat, axis=1)
-    b_mat_red = b_mat[1:, 1:]
-    rho_mat_red = rho_mat[1:, 1:]
-    k = np.array(deg_supp)
-
-    def red_mlfe_ode(t, y):
-        f = y[:num_states]
-        F = y[num_states:num_states + 1]
-        p0ak = y[num_states + 1:num_states + 1 + len(deg_supp) * num_states]
-        pac = y[num_states + 1 + len(deg_supp) * num_states:]
-
-        f = f.reshape((num_states,))
-        F = F.reshape((1,))
-        p0ak = p0ak.reshape((num_states, len(deg_supp)))
-        pac = pac.reshape((num_states - 1, num_states - 1))
-
-        # compute the derivatives
-        df0 = np.dot(b_vec, f) * f[0] * (1 - phi(F[0]))
-        dfa = f[0] * phi(F) * b_mat_red.T @ f[1:] + rho_mat_red.T @ f[1:] + f[1:] * np.dot(b_vec, f) - f[1:] * b_vec[1:]
-        dF = np.dot(b_vec, f)
-
-        dp0ak = np.zeros(shape=(num_states, len(deg_supp)))
-        dp0ak[0,:] = -np.dot(b_vec, f) * k * p0ak[0,:]
-        dp0ak[1:,:] = (p0ak[0,:] * k * b_mat_red.T @ f[1:] + (p0ak[1:,:].T @ rho_mat_red).squeeze()).reshape((num_states - 1, len(deg_supp)))
-
-        dpac = pac @ rho_mat_red
-
-        return np.concatenate((df0.reshape((1,)), dfa, dF.reshape((1,)), dp0ak.flatten(), dpac.flatten()))
-
-    # solve the ode
-    t_span = (0, max_time)
-    t_eval = np.linspace(0, max_time, num_grid_points)
-    sol = solve_ivp(red_mlfe_ode, t_span, ode_initial_conditions, t_eval=t_eval, method='RK45')
-
-    # extract the solution
-    def convert_to_prob(y):
-        f = y[:num_states]
-        F = y[num_states:num_states + 1]
-        p0ak = y[num_states + 1:num_states + 1 + len(deg_supp) * num_states]
-        pac = y[num_states + 1 + len(deg_supp) * num_states:]
-
-        f = f.reshape((num_states,))
-        F = F.reshape((1,))
-        p0ak = p0ak.reshape((num_states, len(deg_supp)))
-        pac = pac.reshape((num_states - 1, num_states - 1))
-
-        return initial_conditions_array[0] * deg_dist_no_zero @ p0ak[1:,:].T + pac.T @ initial_conditions_array[1:]
-
-    # apply convert_to_prob to the solution
-    prob_sol = np.array([convert_to_prob(y) for y in sol.y.T])
-
-    return t_eval, prob_sol, sol
+# TODO: fix reduced mlfe
+# def jump_rate_for_red_mlfe(
+#         state_space: List[Any],
+#         state_to_index: Dict[Any, int],
+#         b: Dict[Tuple[Any, Any], float],
+#         rho: Dict[Tuple[Any, Any], float]
+# ) -> Callable:
+#     # define the rate function to be returned
+#     def rate(source_state, target_state, neighbors_state, **kwargs):
+#         # check if source_state is the zero state
+#         if state_to_index[source_state] == 0:
+#             return sum(b[(a, target_state)] * sum(1 for state in neighbors_state if state == a) for a in state_space)
+#         # if not, transition is independent of neighbor states
+#         else:
+#             return rho[(source_state, target_state)]
+#
+#     return rate
+#
+#
+# def simulate_reduced_markov_lfe(
+#         state_space: List[Any],
+#         state_to_index: Dict[Any, int],
+#         b: Dict[Tuple[Any, Any], float],
+#         rho: Dict[Tuple[Any, Any], float],
+#         deg_dist: List[float],
+#         phi: Callable[[float], float],
+#         max_time: float,
+#         initial_conditions: Dict[Any, float],
+#         num_grid_points: int = 100
+# ):
+#     # define simulation parameters
+#     num_states = len(state_space)
+#     deg_supp = [i for (i,p) in enumerate(deg_dist) if p > 0]
+#     deg_dist_no_zero = np.array([p for p in deg_dist if p > 0])
+#     initial_conditions_array = np.array([v for v in initial_conditions.values()])
+#
+#     # initial condition for f_0, f_a for a = {1, ..., m}
+#     f = initial_conditions_array
+#     # initial condition for F
+#     F = np.array([0.0])
+#     # initial condition for P_0,0;k = 1 for k such that theta(k) > 0
+#     # initial condition for P_0,a;k = 0 for a > 0 and k such that theta(k) > 0 is 0.0
+#     p0ak = np.zeros(shape=(num_states, len(deg_supp)))
+#     p0ak[0, :] = 1.0
+#     # initial condition for P_a,c
+#     pac = np.eye(num_states - 1)
+#
+#     ode_initial_conditions = np.concatenate((f, F, p0ak.flatten(), pac.flatten()))
+#
+#     # convert beta and rho from dictionary to numpy array
+#     b_mat = np.zeros(shape=(num_states, num_states))
+#     rho_mat = np.zeros(shape=(num_states, num_states))
+#     for i in state_space:
+#         for j in state_space:
+#             try:
+#                 b_mat[state_to_index[i], state_to_index[j]] = b[(i,j)]
+#             except KeyError:
+#                 b_mat[state_to_index[i], state_to_index[j]] = 0.0
+#             try:
+#                 rho_mat[state_to_index[i], state_to_index[j]] = rho[(i,j)]
+#             except KeyError:
+#                 rho_mat[state_to_index[i], state_to_index[j]] = 0.0
+#     # diagonal of rho is negative row sum
+#     for i in range(num_states):
+#         rho_mat[i,i] = -np.sum(rho_mat[i,:])
+#     b_vec = np.sum(b_mat, axis=1)
+#     b_mat_red = b_mat[1:, 1:]
+#     rho_mat_red = rho_mat[1:, 1:]
+#     k = np.array(deg_supp)
+#
+#     def red_mlfe_ode(t, y):
+#         f = y[:num_states]
+#         F = y[num_states:num_states + 1]
+#         p0ak = y[num_states + 1:num_states + 1 + len(deg_supp) * num_states]
+#         pac = y[num_states + 1 + len(deg_supp) * num_states:]
+#
+#         f = f.reshape((num_states,))
+#         F = F.reshape((1,))
+#         p0ak = p0ak.reshape((num_states, len(deg_supp)))
+#         pac = pac.reshape((num_states - 1, num_states - 1))
+#
+#         # compute the derivatives
+#         df0 = np.dot(b_vec, f) * f[0] * (1 - phi(F[0]))
+#         dfa = f[0] * phi(F) * b_mat_red.T @ f[1:] + rho_mat_red.T @ f[1:] + f[1:] * np.dot(b_vec, f) - f[1:] * b_vec[1:]
+#         dF = np.dot(b_vec, f)
+#
+#         dp0ak = np.zeros(shape=(num_states, len(deg_supp)))
+#         dp0ak[0,:] = -np.dot(b_vec, f) * k * p0ak[0,:]
+#         dp0ak[1:,:] = (p0ak[0,:] * k * b_mat_red.T @ f[1:] + (p0ak[1:,:].T @ rho_mat_red).squeeze()).reshape((num_states - 1, len(deg_supp)))
+#
+#         dpac = pac @ rho_mat_red
+#
+#         return np.concatenate((df0.reshape((1,)), dfa, dF.reshape((1,)), dp0ak.flatten(), dpac.flatten()))
+#
+#     # solve the ode
+#     t_span = (0, max_time)
+#     t_eval = np.linspace(0, max_time, num_grid_points)
+#     sol = solve_ivp(red_mlfe_ode, t_span, ode_initial_conditions, t_eval=t_eval, method='RK45')
+#
+#     # extract the solution
+#     def convert_to_prob(y):
+#         f = y[:num_states]
+#         F = y[num_states:num_states + 1]
+#         p0ak = y[num_states + 1:num_states + 1 + len(deg_supp) * num_states]
+#         pac = y[num_states + 1 + len(deg_supp) * num_states:]
+#
+#         f = f.reshape((num_states,))
+#         F = F.reshape((1,))
+#         p0ak = p0ak.reshape((num_states, len(deg_supp)))
+#         pac = pac.reshape((num_states - 1, num_states - 1))
+#
+#         return initial_conditions_array[0] * deg_dist_no_zero @ p0ak[1:,:].T + pac.T @ initial_conditions_array[1:]
+#
+#     # apply convert_to_prob to the solution
+#     prob_sol = np.array([convert_to_prob(y) for y in sol.y.T])
+#
+#     return t_eval, prob_sol, sol
 
 
 def one_coordinate_apart(tuple1: Tuple, tuple2: Tuple) -> bool:
@@ -166,14 +167,14 @@ def simulate_markov_lfe(
 
     index_to_ode_state_space = {i: state for i, state in enumerate(ode_state_space)}
 
-    # # define the Markov local-field jump rate
+    # define the Markov local-field jump rate
     if gamma is None:
         if ips.vertex_type_space is None and ips.edge_type_space is None:
             def gamma(source: Tuple, target: Tuple, root_state, one_state, marginal_prob: Dict[Tuple, float], **kwargs) -> float:
                 numerator = sum(
                     (1 + len(remaining_state)) *
                     marginal_prob[(root_state, one_state) + remaining_state] *
-                    ips.rate(source, target, (one_state, ) + remaining_state, global_empirical_measure=marginal_prob if ips.global_interaction else None)
+                    ips.rate(source, target, (one_state, ) + remaining_state, meas=marginal_prob if ips.global_interaction else None)
                     for k in deg_supp for remaining_state in product(ips.state_space, repeat=k-1)
                                 )
                 denominator = sum(
@@ -189,7 +190,7 @@ def simulate_markov_lfe(
                     marginal_prob[((root_state, one_state) + remaining_state, (root_type, one_type) + remaining_type)]
                     * ips.rate(source, target, (one_state,) + remaining_state,
                                neighbors_vertex_type=(root_type, one_type) + remaining_type,
-                               global_empirical_measure=marginal_prob if ips.global_interaction else None)
+                               meas=marginal_prob if ips.global_interaction else None)
                     for k in deg_supp
                     for remaining_state in product(ips.state_space, repeat=k-1)
                     for remaining_type in product(ips.vertex_type_space, repeat=k-1)

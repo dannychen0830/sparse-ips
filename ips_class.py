@@ -1,6 +1,5 @@
 import networkx as nx
 import numpy as np
-from typing import List, Tuple, Dict, Callable, Any
 from abc import abstractmethod
 from itertools import product
 from collections import Counter
@@ -8,16 +7,16 @@ from collections import Counter
 
 class ParticleSystem:
     def __init__(self,
-                 state_space: List[Any],
+                 state_space: list[any],
                  graph: nx.Graph,
                  name: str = None,
-                 deg_dist: Dict[int, float] = None,
-                 vertex_type_space: List[Any] = None,
-                 vertex_type: Dict[int, Any] = None,
-                 edge_type_space: List[Any] = None,
-                 edge_type: Dict[Tuple[int, int], Any] = None,
-                 edge_state: List[Any] = None,
-                 edge_rate: Callable = None,
+                 deg_dist: dict[int, float] = None,
+                 vertex_type_space: list[any] = None,
+                 vertex_type: dict[int, any] = None,
+                 edge_type_space: list[any] = None,
+                 edge_type: dict[tuple[int, int], any] = None,
+                 edge_state: list[any] = None,
+                 edge_rate: callable = None,
                  global_interaction: bool = False):
 
         self.name = name
@@ -40,12 +39,12 @@ class ParticleSystem:
         self.global_interaction = global_interaction
 
     @abstractmethod
-    def rate(self, source_state: Any,
-             target_state: Any,
-             neighbors_state: Tuple[Any],
-             neighbors_vertex_type: List[Any] = None,
-             neighbors_edge_type: List[Any] = None,
-             global_empirical_measure: Dict[Tuple[Any], float] = None) -> float:
+    def rate(self, src: any,
+             tgt: any,
+             neighbors: tuple[any],
+             neighbors_vertex_type: list[any] = None,
+             neighbors_edge_type: list[any] = None,
+             meas: dict[tuple[any], float] = None) -> float:
         """
         Compute the rate of transition from source_state to target_state for a given node.
         This method should be implemented by subclasses.
@@ -87,7 +86,7 @@ class ParticleSystem:
 
         return new_graph
 
-    def renew_graph(self, seed: int, vertex_type_func: Callable = None, edge_type_func: Callable = None, edge_state_func: Callable = None, edge_rate_func: Callable = None):
+    def renew_graph(self, seed: int, vertex_type_func: callable = None, edge_type_func: callable = None, edge_state_func: callable = None, edge_rate_func: callable = None):
         # sample a new graph according to deg distribution
 
         if self.deg_dist is None:
@@ -104,7 +103,7 @@ class ParticleSystem:
 
         return self
 
-    def sim_rate(self, node: int, source_state: Any, target_state: Any, current_config: Dict[int, Any]):
+    def sim_rate(self, node: int, source_state: any, target_state: any, current_config: dict[int, any]):
         # get neighbors of the source state
         neighbors_state = tuple([current_config[neighbor] for neighbor in self.graph.neighbors(node)])
         # get neighbors vertex type
@@ -132,7 +131,7 @@ class ParticleSystem:
                          neighbors_state,
                          neighbors_vertex_type=neighbors_vertex_type,
                          neighbors_edge_type=neighbors_edge_type,
-                         global_empirical_measure=global_empirical_measure)
+                         meas=global_empirical_measure)
 
     def get_state_to_index_map(self):
         """
@@ -144,7 +143,7 @@ class ParticleSystem:
 
 class MeanFieldParticleSystem():
     def __init__(self,
-                 state_space: List[Any],
+                 state_space: list[any],
                  num_particles: int,
                  name: str = None,
                  ):
@@ -158,7 +157,7 @@ class MeanFieldParticleSystem():
              meas: dict[tuple[any], float]) -> float:
         raise NotImplementedError("Subclasses should implement this method.")
 
-    def compute_empirical_measure(self, current_state: Dict[int, Any]) -> Dict[Any, float]:
+    def compute_empirical_measure(self, current_state: dict[int, any]) -> dict[any, float]:
         """
         Compute the empirical measure (fraction of particles in each state).
 
