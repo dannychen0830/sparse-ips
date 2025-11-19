@@ -146,15 +146,16 @@ class MeanFieldParticleSystem():
     def __init__(self,
                  state_space: List[Any],
                  num_particles: int,
-                 name: str = None):
+                 name: str = None,
+                 ):
         self.state_space = state_space
         self.num_particles = num_particles
         self.name = name
 
     @abstractmethod
-    def rate(self, source_state: Any,
-             target_state: Any,
-             global_empirical_measure: Dict[Tuple[Any], float]) -> float:
+    def rate(self, src: any,
+             tgt: any,
+             meas: dict[tuple[any], float]) -> float:
         raise NotImplementedError("Subclasses should implement this method.")
 
     def compute_empirical_measure(self, current_state: Dict[int, Any]) -> Dict[Any, float]:
@@ -174,7 +175,7 @@ class MeanFieldParticleSystem():
         state_counts = Counter(current_state.values())
         return {state: count / self.num_particles for state, count in state_counts.items()}
 
-    def sim_rate(self, source_state: Any, target_state: Any, empirical_measure: Dict[Any, float]):
+    def sim_rate(self, src: any, tgt: any, meas: dict[any, float]):
         """
         Simulate the rate of transition from source_state to target_state for a given node.
         :param source_state: the state particle is jumping from
@@ -182,4 +183,4 @@ class MeanFieldParticleSystem():
         :param empirical_measure: a dictionary of states to its fraction in the population
         :return:
         """
-        return self.rate(source_state, target_state, empirical_measure)
+        return self.rate(src, tgt, meas)
