@@ -6,10 +6,10 @@ import casadi as ca
 
 
 def simulate_mean_field(
-        mfps: MeanFieldParticleSystem,
-        initial_conditions: dict[any, float],
-        max_time: float,
-        num_grid_points: int = 100,
+    mfps: MeanFieldParticleSystem,
+    initial_conditions: dict[any, float],
+    max_time: float,
+    num_grid_points: int = 100,
 ):
     d = len(mfps.state_space)
 
@@ -39,9 +39,7 @@ def simulate_mean_field(
     return sol.t, sol.y
 
 
-def solve_mf_optimal_control(
-
-):
+def solve_mf_optimal_control():
     pass
 
 
@@ -53,20 +51,21 @@ import matplotlib.pyplot as plt
 # High-Level API for Kolmogorov Optimal Control
 # ============================================================================
 
+
 def solve_kolmogorov_optimal_control(
-        rate_function,
-        running_cost,
-        terminal_cost,
-        n_states,
-        n_controls,
-        p_initial,
-        T,
-        N=50,
-        control_bounds=(-1.0, 1.0),
-        integration_method='rk4',
-        solver_options=None,
-        initial_guess=None,
-        verbose=True
+    rate_function,
+    running_cost,
+    terminal_cost,
+    n_states,
+    n_controls,
+    p_initial,
+    T,
+    N=50,
+    control_bounds=(-1.0, 1.0),
+    integration_method="rk4",
+    solver_options=None,
+    initial_guess=None,
+    verbose=True,
 ):
     """
     Solve optimal control problem for forward Kolmogorov equation.
@@ -228,10 +227,14 @@ def solve_kolmogorov_optimal_control(
             k4 = dynamics(p + dt * k3, u)
             return p + dt / 6 * (k1 + 2 * k2 + 2 * k3 + k4)
 
-        p_sym = ca.MX.sym('p', n_states)  # Current state
-        u_sym = ca.MX.sym('u', n_controls)  # Control input
-        dt_sym = ca.MX.sym('dt', 1)  # Time step
-        rk4_integrator = ca.Function('rk4_integrator', [p_sym, u_sym, dt_sym], [build_rk4_step(p_sym, u_sym, dt_sym)])
+        p_sym = ca.MX.sym("p", n_states)  # Current state
+        u_sym = ca.MX.sym("u", n_controls)  # Control input
+        dt_sym = ca.MX.sym("dt", 1)  # Time step
+        rk4_integrator = ca.Function(
+            "rk4_integrator",
+            [p_sym, u_sym, dt_sym],
+            [build_rk4_step(p_sym, u_sym, dt_sym)],
+        )
 
         return rk4_integrator
 
@@ -256,7 +259,7 @@ def solve_kolmogorov_optimal_control(
     # Dynamics constraints
     for k in range(N):
         p_next = my_integrator(P[:, k], U[:, k], dt)
-        opti.subject_to(P[:, k+1] == p_next)
+        opti.subject_to(P[:, k + 1] == p_next)
 
     # Path constraints
     opti.subject_to(ca.vec(P) >= -1e-6)  # Non-negative probabilities
@@ -280,8 +283,8 @@ def solve_kolmogorov_optimal_control(
 
     # Initial guess
     if initial_guess is not None:
-        opti.set_initial(P, initial_guess['P'])
-        opti.set_initial(U, initial_guess['U'])
+        opti.set_initial(P, initial_guess["P"])
+        opti.set_initial(U, initial_guess["U"])
     else:
         # Default: uniform distribution
         opti.set_initial(P, np.ones((n_states, N + 1)) / n_states)
@@ -289,15 +292,15 @@ def solve_kolmogorov_optimal_control(
 
     # Solver configuration
     default_options = {
-        'ipopt.print_level': 5 if verbose else 0,
-        'print_time': 1 if verbose else 0,
-        'ipopt.max_iter': 2000,
-        'ipopt.tol': 1e-6,
+        "ipopt.print_level": 5 if verbose else 0,
+        "print_time": 1 if verbose else 0,
+        "ipopt.max_iter": 2000,
+        "ipopt.tol": 1e-6,
     }
     if solver_options is not None:
         default_options.update(solver_options)
 
-    opti.solver('ipopt', default_options)
+    opti.solver("ipopt", default_options)
 
     # Solve
     if verbose:
@@ -334,14 +337,14 @@ def solve_kolmogorov_optimal_control(
     t = np.linspace(0, T, N + 1)
 
     return {
-        'P': P_opt,
-        'U': U_opt,
-        't': t,
-        'cost': cost_opt,
-        'success': success,
-        'opti': opti,
-        'dt': dt,
-        'N': N
+        "P": P_opt,
+        "U": U_opt,
+        "t": t,
+        "cost": cost_opt,
+        "success": success,
+        "opti": opti,
+        "dt": dt,
+        "N": N,
     }
 
 
@@ -349,11 +352,12 @@ def solve_kolmogorov_optimal_control(
 # Visualization Helper
 # ============================================================================
 
+
 def plot_kolmogorov_solution(result, p_target=None, figsize=(14, 10)):
     """Plot the optimal control solution."""
-    P = result['P']
-    U = result['U']
-    t = result['t']
+    P = result["P"]
+    U = result["U"]
+    t = result["t"]
     n_states, _ = P.shape
     n_controls, N = U.shape
 
@@ -362,14 +366,16 @@ def plot_kolmogorov_solution(result, p_target=None, figsize=(14, 10)):
     # Plot 1: Probability evolution
     ax1 = plt.subplot(3, 1, 1)
     for i in range(n_states):
-        ax1.plot(t, P[i, :], linewidth=2, label=f'State {i}')
+        ax1.plot(t, P[i, :], linewidth=2, label=f"State {i}")
     if p_target is not None:
         for i, val in enumerate(p_target):
             if val > 0:
-                ax1.axhline(y=val, color='r', linestyle='--', alpha=0.3)
-    ax1.set_ylabel('Probability', fontsize=12)
-    ax1.set_title('Optimal Probability Distribution Evolution', fontsize=14, fontweight='bold')
-    ax1.legend(loc='right')
+                ax1.axhline(y=val, color="r", linestyle="--", alpha=0.3)
+    ax1.set_ylabel("Probability", fontsize=12)
+    ax1.set_title(
+        "Optimal Probability Distribution Evolution", fontsize=14, fontweight="bold"
+    )
+    ax1.legend(loc="right")
     ax1.grid(True, alpha=0.3)
     ax1.set_ylim([-0.05, 1.05])
 
@@ -377,21 +383,27 @@ def plot_kolmogorov_solution(result, p_target=None, figsize=(14, 10)):
     ax2 = plt.subplot(3, 1, 2)
     t_u = t[:-1]
     for i in range(n_controls):
-        ax2.plot(t_u, U[i, :], linewidth=2, label=f'u_{i}')
-    ax2.set_ylabel('Control', fontsize=12)
-    ax2.set_title('Optimal Control Signals', fontsize=12)
+        ax2.plot(t_u, U[i, :], linewidth=2, label=f"u_{i}")
+    ax2.set_ylabel("Control", fontsize=12)
+    ax2.set_title("Optimal Control Signals", fontsize=12)
     ax2.legend()
     ax2.grid(True, alpha=0.3)
 
     # Plot 3: Heatmap
     ax3 = plt.subplot(3, 1, 3)
-    im = ax3.imshow(P, aspect='auto', cmap='viridis', interpolation='nearest',
-                    extent=[0, t[-1], -0.5, n_states - 0.5], origin='lower')
-    ax3.set_xlabel('Time (s)', fontsize=12)
-    ax3.set_ylabel('State', fontsize=12)
-    ax3.set_title('Probability Distribution Heatmap', fontsize=12)
+    im = ax3.imshow(
+        P,
+        aspect="auto",
+        cmap="viridis",
+        interpolation="nearest",
+        extent=[0, t[-1], -0.5, n_states - 0.5],
+        origin="lower",
+    )
+    ax3.set_xlabel("Time (s)", fontsize=12)
+    ax3.set_ylabel("State", fontsize=12)
+    ax3.set_title("Probability Distribution Heatmap", fontsize=12)
     ax3.set_yticks(range(n_states))
-    plt.colorbar(im, ax=ax3, label='Probability')
+    plt.colorbar(im, ax=ax3, label="Probability")
 
     plt.tight_layout()
     return fig
@@ -407,7 +419,6 @@ if __name__ == "__main__":
     n_states = 150
     n_controls = 2
 
-
     # Define rate function (SIR model)
 
     def rate(i, j, p, u, n_states):
@@ -420,15 +431,13 @@ if __name__ == "__main__":
             return 0.0
 
     def running_cost(p, u):
-        return - 10 * (1 - p[n_states - 1] - p[0]) / n_states + ca.sumsqr(u) / n_states
-
+        return -10 * (1 - p[n_states - 1] - p[0]) / n_states + ca.sumsqr(u) / n_states
 
     def terminal_cost(p):
         return -100 * p[n_states - 1]
 
-
     # Initial condition
-    p0 = np.ones(n_states)/n_states
+    p0 = np.ones(n_states) / n_states
 
     # Solve
     result = solve_kolmogorov_optimal_control(
@@ -441,8 +450,8 @@ if __name__ == "__main__":
         T=5.0,
         N=500,
         control_bounds=(0.0, 15.0),
-        integration_method='rk4',
-        verbose=True
+        integration_method="rk4",
+        verbose=True,
     )
 
     # Print summary

@@ -4,11 +4,11 @@ from typing import List, Tuple, Dict, Callable, Any
 
 
 def simulate_jump_process(
-        ips: ParticleSystem,
-        initial_conditions: Dict[int, Any],
-        max_time: float,
-        seed: int = None,
-        verbose: bool = False
+    ips: ParticleSystem,
+    initial_conditions: Dict[int, Any],
+    max_time: float,
+    seed: int = None,
+    verbose: bool = False,
 ) -> List[Tuple[int, float, Tuple[Any, Any]]]:
     """
     Simulate interacting particles on a graph as a continuous-time Markov chain.
@@ -38,12 +38,14 @@ def simulate_jump_process(
         where transition is a tuple (source_state, target_state)
     """
     if isinstance(ips, MeanFieldParticleSystem):
-        return simulate_mean_field_jump_process(ips, initial_conditions, max_time, seed, verbose)
+        return simulate_mean_field_jump_process(
+            ips, initial_conditions, max_time, seed, verbose
+        )
 
     if seed is not None:
         np.random.seed(seed)
     if verbose:
-        start_time = np.datetime64('now')
+        start_time = np.datetime64("now")
 
     # Initialize current state and simulation time
     current_state = initial_conditions.copy()
@@ -63,10 +65,14 @@ def simulate_jump_process(
             # Consider all possible target states for this node
             for target_state in ips.state_space:
                 if target_state != current_node_state:
-                    transition_rate = ips.sim_rate(node, current_node_state, target_state, current_state)
+                    transition_rate = ips.sim_rate(
+                        node, current_node_state, target_state, current_state
+                    )
 
                     if transition_rate > 0:
-                        possible_transitions.append((node, current_node_state, target_state))
+                        possible_transitions.append(
+                            (node, current_node_state, target_state)
+                        )
                         rates.append(transition_rate)
 
         # If no transitions are possible, we're done
@@ -90,7 +96,9 @@ def simulate_jump_process(
             break
 
         # Sample which transition occurs
-        transition_index = np.random.choice(len(possible_transitions), p=np.array(rates) / total_rate)
+        transition_index = np.random.choice(
+            len(possible_transitions), p=np.array(rates) / total_rate
+        )
         node, source_state, target_state = possible_transitions[transition_index]
 
         # Update state
@@ -100,15 +108,15 @@ def simulate_jump_process(
         jumps.append((node, current_time, (source_state, target_state)))
 
     if verbose:
-       print(f'completed simulation in {np.datetime64("now") - start_time} seconds.')
+        print(f'completed simulation in {np.datetime64("now") - start_time} seconds.')
 
     return jumps
 
 
 def get_particle_states_at_times(
-        jumps: List[Tuple[int, float, Tuple[Any, Any]]],
-        initial_conditions: Dict[int, Any],
-        timestamps: List[float]
+    jumps: List[Tuple[int, float, Tuple[Any, Any]]],
+    initial_conditions: Dict[int, Any],
+    timestamps: List[float],
 ) -> List[Dict[int, Any]]:
     """
     Get the state of each particle at multiple specific time points efficiently.
@@ -146,7 +154,9 @@ def get_particle_states_at_times(
     for particle_idx, jump_time, (_, target_state) in sorted_jumps:
         # Update results for all timestamps between the last processed jump and this one
         while time_index < len(sorted_times) and sorted_times[time_index] < jump_time:
-            results[sorted_indices[time_index]] = {k: v for k, v in current_states.items()}
+            results[sorted_indices[time_index]] = {
+                k: v for k, v in current_states.items()
+            }
             time_index += 1
 
         # Update current state
@@ -165,14 +175,14 @@ def get_particle_states_at_times(
 
 
 def simulate_mean_field_jump_process(
-        mfps: MeanFieldParticleSystem,
-        initial_conditions: Dict[int, Any],
-        max_time: float,
-        seed: int = None,
-        verbose: bool = False,
-        tau_leap: bool = False,
-        tau: float = 0.01,
-        epsilon: float = 0.03
+    mfps: MeanFieldParticleSystem,
+    initial_conditions: Dict[int, Any],
+    max_time: float,
+    seed: int = None,
+    verbose: bool = False,
+    tau_leap: bool = False,
+    tau: float = 0.01,
+    epsilon: float = 0.03,
 ) -> List[Tuple[int, float, Tuple[Any, Any]]]:
     """
     Simulate a mean-field particle system as a continuous-time Markov chain.
@@ -203,23 +213,27 @@ def simulate_mean_field_jump_process(
         where transition is a tuple (source_state, target_state)
     """
     if tau_leap:
-        return simulate_mean_field_tau_leap(mfps, initial_conditions, max_time, seed, verbose, tau, epsilon)
+        return simulate_mean_field_tau_leap(
+            mfps, initial_conditions, max_time, seed, verbose, tau, epsilon
+        )
     else:
-        return simulate_mean_field_exact(mfps, initial_conditions, max_time, seed, verbose)
+        return simulate_mean_field_exact(
+            mfps, initial_conditions, max_time, seed, verbose
+        )
 
 
 def simulate_mean_field_exact(
-        mfps: MeanFieldParticleSystem,
-        initial_conditions: Dict[int, Any],
-        max_time: float,
-        seed: int = None,
-        verbose: bool = False
+    mfps: MeanFieldParticleSystem,
+    initial_conditions: Dict[int, Any],
+    max_time: float,
+    seed: int = None,
+    verbose: bool = False,
 ) -> List[Tuple[int, float, Tuple[Any, Any]]]:
     """Exact simulation (original algorithm)."""
     if seed is not None:
         np.random.seed(seed)
     if verbose:
-        start_time = np.datetime64('now')
+        start_time = np.datetime64("now")
 
     # Initialize current state and simulation time
     current_state = initial_conditions.copy()
@@ -245,18 +259,27 @@ def simulate_mean_field_exact(
 
         for source_state in mfps.state_space:
             # Only consider transitions from states that have particles
-            if source_state not in empirical_measure or empirical_measure[source_state] == 0:
+            if (
+                source_state not in empirical_measure
+                or empirical_measure[source_state] == 0
+            ):
                 continue
 
             for target_state in mfps.state_space:
                 if target_state != source_state:
                     # Rate per particle in source state
-                    per_particle_rate = mfps.sim_rate(source_state, target_state, empirical_measure)
+                    per_particle_rate = mfps.sim_rate(
+                        source_state, target_state, empirical_measure
+                    )
 
                     if per_particle_rate > 0:
                         # Total rate = per_particle_rate × number_of_particles_in_source_state
-                        num_particles_in_source = int(empirical_measure[source_state] * mfps.num_particles)
-                        total_transition_rate = per_particle_rate * num_particles_in_source
+                        num_particles_in_source = int(
+                            empirical_measure[source_state] * mfps.num_particles
+                        )
+                        total_transition_rate = (
+                            per_particle_rate * num_particles_in_source
+                        )
 
                         possible_transitions.append((source_state, target_state))
                         rates.append(total_transition_rate)
@@ -282,7 +305,9 @@ def simulate_mean_field_exact(
             break
 
         # Sample which STATE transition occurs
-        transition_index = np.random.choice(len(possible_transitions), p=np.array(rates) / total_rate)
+        transition_index = np.random.choice(
+            len(possible_transitions), p=np.array(rates) / total_rate
+        )
         source_state, target_state = possible_transitions[transition_index]
 
         # Now randomly choose a particle in the source state
@@ -304,8 +329,12 @@ def simulate_mean_field_exact(
 
         # EFFICIENTLY UPDATE EMPIRICAL MEASURE
         # Decrease count for source state, increase count for target state
-        empirical_measure[source_state] = empirical_measure.get(source_state, 0) - 1.0 / mfps.num_particles
-        empirical_measure[target_state] = empirical_measure.get(target_state, 0) + 1.0 / mfps.num_particles
+        empirical_measure[source_state] = (
+            empirical_measure.get(source_state, 0) - 1.0 / mfps.num_particles
+        )
+        empirical_measure[target_state] = (
+            empirical_measure.get(target_state, 0) + 1.0 / mfps.num_particles
+        )
 
         # Clean up zero entries to keep dictionary clean
         if empirical_measure[source_state] == 0:
@@ -321,13 +350,13 @@ def simulate_mean_field_exact(
 
 
 def simulate_mean_field_tau_leap(
-        mfps: MeanFieldParticleSystem,
-        initial_conditions: Dict[int, Any],
-        max_time: float,
-        seed: int = None,
-        verbose: bool = False,
-        tau: float = 0.01,
-        epsilon: float = 0.03
+    mfps: MeanFieldParticleSystem,
+    initial_conditions: Dict[int, Any],
+    max_time: float,
+    seed: int = None,
+    verbose: bool = False,
+    tau: float = 0.01,
+    epsilon: float = 0.03,
 ) -> List[Tuple[int, float, Tuple[Any, Any]]]:
     """
     Simulate using tau-leaping for faster approximate simulation.
@@ -342,7 +371,7 @@ def simulate_mean_field_tau_leap(
     if seed is not None:
         np.random.seed(seed)
     if verbose:
-        start_time = np.datetime64('now')
+        start_time = np.datetime64("now")
 
     # Initialize current state and simulation time
     current_state = initial_conditions.copy()
@@ -377,11 +406,17 @@ def simulate_mean_field_tau_leap(
 
             for target_state in mfps.state_space:
                 if target_state != source_state:
-                    per_particle_rate = mfps.sim_rate(source_state, target_state, empirical_measure)
+                    per_particle_rate = mfps.sim_rate(
+                        source_state, target_state, empirical_measure
+                    )
 
                     if per_particle_rate > 0:
-                        total_transition_rate = per_particle_rate * state_counts[source_state]
-                        transition_rates[(source_state, target_state)] = total_transition_rate
+                        total_transition_rate = (
+                            per_particle_rate * state_counts[source_state]
+                        )
+                        transition_rates[(source_state, target_state)] = (
+                            total_transition_rate
+                        )
                         total_rate += total_transition_rate
 
         if total_rate == 0:
@@ -390,9 +425,13 @@ def simulate_mean_field_tau_leap(
         # Adaptive tau selection (optional - can use fixed tau for speed)
         if epsilon > 0:
             # Simple adaptive tau: ensure no state changes by more than epsilon*N in one step
-            max_expected_change = max(transition_rates.values()) * tau if transition_rates else 0
+            max_expected_change = (
+                max(transition_rates.values()) * tau if transition_rates else 0
+            )
             if max_expected_change > epsilon * mfps.num_particles:
-                tau = min(tau, epsilon * mfps.num_particles / max(transition_rates.values()))
+                tau = min(
+                    tau, epsilon * mfps.num_particles / max(transition_rates.values())
+                )
 
         # Ensure we don't overshoot max_time
         actual_tau = min(tau, max_time - current_time)
@@ -422,7 +461,9 @@ def simulate_mean_field_tau_leap(
                 num_jumps = len(available_particles)
 
             # Randomly select particles to transition
-            transitioning_particles = np.random.choice(available_particles, size=num_jumps, replace=False)
+            transitioning_particles = np.random.choice(
+                available_particles, size=num_jumps, replace=False
+            )
 
             for particle_id in transitioning_particles:
                 # Update state
@@ -443,10 +484,18 @@ def simulate_mean_field_tau_leap(
             state_counts[target_state] = state_counts.get(target_state, 0) + num_jumps
 
         # Update empirical measure
-        empirical_measure = {state: count / mfps.num_particles for state, count in state_counts.items() if count > 0}
+        empirical_measure = {
+            state: count / mfps.num_particles
+            for state, count in state_counts.items()
+            if count > 0
+        }
 
         # Clean up empty particle lists
-        particles_by_state = {state: particles for state, particles in particles_by_state.items() if particles}
+        particles_by_state = {
+            state: particles
+            for state, particles in particles_by_state.items()
+            if particles
+        }
 
         # Advance time
         current_time += actual_tau
@@ -455,6 +504,8 @@ def simulate_mean_field_tau_leap(
     jumps.sort(key=lambda x: x[1])
 
     if verbose:
-        print(f'completed tau-leaping simulation in {np.datetime64("now") - start_time} seconds.')
+        print(
+            f'completed tau-leaping simulation in {np.datetime64("now") - start_time} seconds.'
+        )
 
     return jumps

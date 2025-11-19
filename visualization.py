@@ -11,7 +11,11 @@ from collections import Counter
 
 
 def get_color(idx, num_colors=10):
-    return cm.tab10(np.linspace(0, 1, num_colors)) if idx is None else cm.tab10(np.linspace(0, 1, num_colors))[idx]
+    return (
+        cm.tab10(np.linspace(0, 1, num_colors))
+        if idx is None
+        else cm.tab10(np.linspace(0, 1, num_colors))[idx]
+    )
 
 
 def plot_ensemble_state_probabilities(
@@ -24,7 +28,7 @@ def plot_ensemble_state_probabilities(
         colors=None,
         labels=None,
         title: str = None,
-        figsize=None
+        figsize=None,
 ) -> Tuple[plt.Figure, plt.Axes]:
     """
     Plot the average empirical probability of states across multiple simulation runs,
@@ -87,14 +91,18 @@ def plot_ensemble_state_probabilities(
     # For each run, calculate empirical probabilities at all time points efficiently
     for run_idx, jumps in enumerate(jumps_list):
         # Get system state at all time points in one pass
-        all_states = get_particle_states_at_times(jumps, initial_conditions_list[run_idx], time_points)
+        all_states = get_particle_states_at_times(
+            jumps, initial_conditions_list[run_idx], time_points
+        )
 
         # Process each time point
         for t_idx, states_at_time in enumerate(all_states):
             # Calculate empirical probabilities
             counter = Counter(states_at_time.values())
             for s_idx, state in enumerate(ips.state_space):
-                all_probabilities[run_idx, s_idx, t_idx] = counter.get(state, 0) / num_nodes
+                all_probabilities[run_idx, s_idx, t_idx] = (
+                        counter.get(state, 0) / num_nodes
+                )
 
     # Calculate mean and standard deviation across runs
     mean_probabilities = np.mean(all_probabilities, axis=0)
@@ -102,18 +110,30 @@ def plot_ensemble_state_probabilities(
 
     # Plot the mean empirical probabilities as step functions with error bands
     for s_idx, state in enumerate(ips.state_space):
-        line = ax.plot(time_points, mean_probabilities[s_idx], color=colors[s_idx], label=labels[s_idx], alpha=0.8)
+        line = ax.plot(
+            time_points,
+            mean_probabilities[s_idx],
+            color=colors[s_idx],
+            label=labels[s_idx],
+            alpha=0.8,
+        )
 
         # Add error bands (2 standard deviations)
-        lower_bound = np.maximum(0, mean_probabilities[s_idx] - 2 * std_probabilities[s_idx])
-        upper_bound = np.minimum(1, mean_probabilities[s_idx] + 2 * std_probabilities[s_idx])
+        lower_bound = np.maximum(
+            0, mean_probabilities[s_idx] - 2 * std_probabilities[s_idx]
+        )
+        upper_bound = np.minimum(
+            1, mean_probabilities[s_idx] + 2 * std_probabilities[s_idx]
+        )
 
-        ax.fill_between(time_points, lower_bound, upper_bound, alpha=0.2, color=colors[s_idx])
+        ax.fill_between(
+            time_points, lower_bound, upper_bound, alpha=0.2, color=colors[s_idx]
+        )
 
     # Add legend, labels, and title
-    ax.set_xlabel('time')
+    ax.set_xlabel("time")
     ax.set_ylabel(None)
-    ax.set_title(f'Average state-occupancy for {ips.name}' if title is None else title)
+    ax.set_title(f"Average state-occupancy for {ips.name}" if title is None else title)
     ax.legend()
     ax.grid(True, alpha=0.3)
 

@@ -1,11 +1,13 @@
 import numpy as np
 from sparseips.ips_class import ParticleSystem, MeanFieldParticleSystem
 from sparseips.jump_ips_sim import simulate_mean_field_jump_process, get_particle_states_at_times
-from typing import List, Tuple, Dict, Callable, Any
 from scipy.integrate import solve_ivp
+from scipy.sparse import csr_matrix, diags
 from itertools import product
 from collections import Counter
 from datetime import datetime
+
+import jax
 
 
 # TODO: fix reduced mlfe
@@ -16,13 +18,13 @@ from datetime import datetime
 #         rho: Dict[Tuple[Any, Any], float]
 # ) -> Callable:
 #     # define the rate function to be returned
-#     def rate(source_state, target_state, neighbors_state, **kwargs):
-#         # check if source_state is the zero state
-#         if state_to_index[source_state] == 0:
-#             return sum(b[(a, target_state)] * sum(1 for state in neighbors_state if state == a) for a in state_space)
+#     def rate(src_state, tgt_state, neighbors_state, **kwargs):
+#         # check if src_state is the zero state
+#         if state_to_index[src_state] == 0:
+#             return sum(b[(a, tgt_state)] * sum(1 for state in neighbors_state if state == a) for a in state_space)
 #         # if not, transition is independent of neighbor states
 #         else:
-#             return rho[(source_state, target_state)]
+#             return rho[(src_state, tgt_state)]
 #
 #     return rate
 #
@@ -127,7 +129,7 @@ from datetime import datetime
 #     return t_eval, prob_sol, sol
 
 
-def one_coordinate_apart(tuple1: Tuple, tuple2: Tuple) -> bool:
+def one_coordinate_apart(tuple1: tuple, tuple2: tuple) -> bool:
     """
     Check if two tuples are one coordinate apart, i.e., they differ in exactly one coordinate.
     :param tuple1: first input tuple
@@ -139,166 +141,203 @@ def one_coordinate_apart(tuple1: Tuple, tuple2: Tuple) -> bool:
 
 def simulate_markov_lfe(
         ips: ParticleSystem,
-        initial_conditions: Dict[Any, float],
+        initial_conditions: dict[any, float],
         max_time: float,
-        vertex_type_init: Dict[Any, float] = None,
-        edge_type_init: Dict[Any, float] = None,
+        vertex_type_init: dict[any, float] = None,
+        edge_type_init: dict[any, float] = None,
         num_grid_points: int = 100,
-        gamma: Callable = None,
-) -> Tuple[np.ndarray, np.ndarray, Dict[int, Tuple[Any]]]:
+        gamma: callable = None,
+) -> tuple[np.ndarray, np.ndarray, dict[int, tuple[any]]]:
     # model parameters
     deg_dist = ips.get_empirical_degree_distribution()
-    deg_supp = [i for (i,p) in deg_dist.items() if p > 0]
+    deg_supp = [i for (i, p) in deg_dist.items() if p > 0]
 
     # track all possible root-children marginals
     if ips.vertex_type_space is None and ips.edge_type_space is None:
-        vertex_state_space = [(root,) + children for k in deg_supp for (root, children) in product(ips.state_space, product(ips.state_space, repeat=k))]
-        ode_state_space = [(root,) + children for k in deg_supp for (root, children) in product(ips.state_space, product(ips.state_space, repeat=k))]
+        vertex_state_space = [(root,) + children for k in deg_supp for (root, children) in
+                              product(ips.state_space, product(ips.state_space, repeat=k))]
+        ode_state_space = [(root,) + children for k in deg_supp for (root, children) in
+                           product(ips.state_space, product(ips.state_space, repeat=k))]
 
     elif ips.vertex_type_space is not None and ips.edge_type_space is None:
-        vertex_state_space = [(root,) + children for k in deg_supp for (root, children) in product(ips.state_space, product(ips.state_space, repeat=k))]
-        vertex_type_space = [(root,) + children for k in deg_supp for (root, children) in product(ips.vertex_type_space, product(ips.vertex_type_space, repeat=k))]
-        ode_state_space = [(state, type) for state in vertex_state_space for type in vertex_type_space if len(state) == len(type)]
+        vertex_state_space = [(root,) + children for k in deg_supp for (root, children) in
+                              product(ips.state_space, product(ips.state_space, repeat=k))]
+        vertex_type_space = [(root,) + children for k in deg_supp for (root, children) in
+                             product(ips.vertex_type_space, product(ips.vertex_type_space, repeat=k))]
+        ode_state_space = [(state, type) for state in vertex_state_space for type in vertex_type_space if
+                           len(state) == len(type)]
 
     elif ips.vertex_type_space is None and ips.edge_type_space is not None:
-        vertex_state_space = [(root,) + children for k in deg_supp for (root, children) in product(ips.state_space, product(ips.state_space, repeat=k))]
-        edge_type_space = [children for k in deg_supp for (root, children) in product(ips.edge_type_space, product(ips.edge_type_space, repeat=k))]
-        ode_state_space = [(state, type) for state in vertex_state_space for type in edge_type_space if len(state) == len(type) + 1]
+        vertex_state_space = [(root,) + children for k in deg_supp for (root, children) in
+                              product(ips.state_space, product(ips.state_space, repeat=k))]
+        edge_type_space = [children for k in deg_supp for (root, children) in
+                           product(ips.edge_type_space, product(ips.edge_type_space, repeat=k))]
+        ode_state_space = [(state, type) for state in vertex_state_space for type in edge_type_space if
+                           len(state) == len(type) + 1]
 
     index_to_ode_state_space = {i: state for i, state in enumerate(ode_state_space)}
+    ode_state_space_to_index = {state: i for i, state in enumerate(ode_state_space)}
 
     # define the Markov local-field jump rate
     if gamma is None:
         if ips.vertex_type_space is None and ips.edge_type_space is None:
-            def gamma(source: Tuple, target: Tuple, root_state, one_state, marginal_prob: Dict[Tuple, float], **kwargs) -> float:
+            def gamma(src: tuple, tgt: tuple, root_state, one_state, marginal_prob: dict[tuple, float],
+                      **kwargs) -> float:
                 numerator = sum(
                     (1 + len(remaining_state)) *
                     marginal_prob[(root_state, one_state) + remaining_state] *
-                    ips.rate(source, target, (one_state, ) + remaining_state, meas=marginal_prob if ips.global_interaction else None)
-                    for k in deg_supp for remaining_state in product(ips.state_space, repeat=k-1)
-                                )
+                    ips.rate(src, tgt, (one_state,) + remaining_state,
+                             meas=marginal_prob if ips.global_interaction else None)
+                    for k in deg_supp for remaining_state in product(ips.state_space, repeat=k - 1)
+                )
                 denominator = sum(
                     (1 + len(remaining_state)) * marginal_prob[(root_state, one_state) + remaining_state]
-                    for k in deg_supp for remaining_state in product(ips.state_space, repeat=k-1)
+                    for k in deg_supp for remaining_state in product(ips.state_space, repeat=k - 1)
                 )
                 return numerator / denominator if denominator > 0 else 0
 
         elif ips.vertex_type_space is not None and ips.edge_type_space is None:
-            def gamma(source: Tuple, target: Tuple, root_state, one_state, marginal_prob: Dict[Tuple, float], root_type, one_type) -> float:
+            def gamma(src: tuple, tgt: tuple, root_state, one_state, marginal_prob: dict[tuple, float], root_type,
+                      one_type) -> float:
                 numerator = sum(
                     (2 + len(remaining_state)) *
                     marginal_prob[((root_state, one_state) + remaining_state, (root_type, one_type) + remaining_type)]
-                    * ips.rate(source, target, (one_state,) + remaining_state,
+                    * ips.rate(src, tgt, (one_state,) + remaining_state,
                                neighbors_vertex_type=(root_type, one_type) + remaining_type,
                                meas=marginal_prob if ips.global_interaction else None)
                     for k in deg_supp
-                    for remaining_state in product(ips.state_space, repeat=k-1)
-                    for remaining_type in product(ips.vertex_type_space, repeat=k-1)
-                                )
+                    for remaining_state in product(ips.state_space, repeat=k - 1)
+                    for remaining_type in product(ips.vertex_type_space, repeat=k - 1)
+                )
                 denominator = sum(
-                    (2 + len(remaining_state)) * marginal_prob[((root_state, one_state) + remaining_state, (root_type, one_type) + remaining_type)]
+                    (2 + len(remaining_state)) * marginal_prob[
+                        ((root_state, one_state) + remaining_state, (root_type, one_type) + remaining_type)]
                     for k in deg_supp
-                    for remaining_state in product(ips.state_space, repeat=k-1)
-                    for remaining_type in product(ips.vertex_type_space, repeat=k-1)
+                    for remaining_state in product(ips.state_space, repeat=k - 1)
+                    for remaining_type in product(ips.vertex_type_space, repeat=k - 1)
                 )
                 return numerator / denominator if denominator > 0 else 0
 
         elif ips.vertex_type_space is None and ips.edge_type_space is not None:
-            def gamma(source: Tuple, target: Tuple, root_state, one_state, marginal_prob: Dict[Tuple, float], root_one_type) -> float:
+            def gamma(src: tuple, tgt: tuple, root_state, one_state, marginal_prob: dict[tuple, float],
+                      root_one_type) -> float:
                 numerator = sum(
                     (2 + len(remaining_state)) *
                     marginal_prob[((root_state, one_state) + remaining_state, (root_one_type,) + remaining_type)]
-                    * ips.rate(source, target, (one_state,) + remaining_state,
+                    * ips.rate(src, tgt, (one_state,) + remaining_state,
                                neighbors_edge_type=(root_one_type,) + remaining_type,
-                               global_empirical_measure=marginal_prob if ips.global_interaction else None)
+                               meas=marginal_prob if ips.global_interaction else None)
                     for k in deg_supp
-                    for remaining_state in product(ips.state_space, repeat=k-1)
-                    for remaining_type in product(ips.edge_type_space, repeat=k-1)
-                                )
+                    for remaining_state in product(ips.state_space, repeat=k - 1)
+                    for remaining_type in product(ips.edge_type_space, repeat=k - 1)
+                )
                 denominator = sum(
-                    (2 + len(remaining_state)) * marginal_prob[((root_state, one_state) + remaining_state, (root_one_type,) + remaining_type)]
+                    (2 + len(remaining_state)) * marginal_prob[
+                        ((root_state, one_state) + remaining_state, (root_one_type,) + remaining_type)]
                     for k in deg_supp
-                    for remaining_state in product(ips.state_space, repeat=k-1)
-                    for remaining_type in product(ips.edge_type_space, repeat=k-1)
+                    for remaining_state in product(ips.state_space, repeat=k - 1)
+                    for remaining_type in product(ips.edge_type_space, repeat=k - 1)
                 )
                 return numerator / denominator if denominator > 0 else 0
+
+    # identify non-zero transitions rates
+    # TODO: further reduce allowable transitions
+    rows = []
+    cols = []
+
+    for src, tgt in product(vertex_state_space, repeat=2):
+        if one_coordinate_apart(src, tgt):
+            if ips.vertex_type_space is None and ips.edge_type_space is None:
+                rows.append(ode_state_space_to_index[src])
+                cols.append(ode_state_space_to_index[tgt])
+            elif ips.vertex_type_space is not None and ips.edge_type_space is None:
+                for neighbors_types in vertex_type_space:
+                    rows.append(ode_state_space_to_index[(src, neighbors_types)])
+                    cols.append(ode_state_space_to_index[(tgt, neighbors_types)])
+            elif ips.vertex_type_space is None and ips.edge_type_space is not None:
+                for neighbors_types in edge_type_space:
+                    rows.append(ode_state_space_to_index[(src, neighbors_types)])
+                    cols.append(ode_state_space_to_index[(tgt, neighbors_types)])
+
+    # store sparse matrix (initialize the first iteration)
+    sparse_Q_off_diag = csr_matrix(([0] * len(rows), (rows, cols)),
+                                       shape=(len(ode_state_space), len(ode_state_space)))
 
     def mlfe_ode(t, p):
         # convert p to dictionary from ode_state_space to probabilities
         marginal_prob = {ode_state_space[i]: p[i] for i in range(len(ode_state_space))}
 
-        # extract source, target relationships in the expanded ode_state_space
-        ode_rate = {}
-        for source, target in product(vertex_state_space, repeat=2):
-            if one_coordinate_apart(source, target):
-                # find the index of the changed coordinate
-                changed_index = next(i for i in range(len(source)) if source[i] != target[i])
+        # extract src, tgt relationships in the expanded ode_state_space
+        ode_rate = []
+        for row_idx, col_idx in zip(rows, cols):
+            src = index_to_ode_state_space[row_idx]
+            tgt = index_to_ode_state_space[col_idx]
 
-                if ips.vertex_type_space is None and ips.edge_type_space is None:
-                    # if the root jumped, return usual rate
-                    if changed_index == 0:
-                        ode_rate[(source, target)] = ips.rate(source[0], target[0], source[1:], global_empirical_measure=marginal_prob if ips.global_interaction else None)
-                    # otherwise, take conditional rate
-                    else:
-                        ode_rate[(source, target)] = gamma(source[changed_index], target[changed_index], source[changed_index], source[0], marginal_prob)
+            # find the index of the changed coordinate
+            changed_index = next(i for i in range(len(src)) if src[i] != tgt[i])
 
-                elif ips.vertex_type_space is not None and ips.edge_type_space is None:
-                    for neighborhood_type in product(ips.vertex_type_space, repeat=len(source)):
-                        if changed_index == 0:
-                            ode_rate[(source, target, neighborhood_type)] = ips.rate(source[0],
-                                                                                     target[0],
-                                                                                     source[1:],
-                                                                                     neighbors_vertex_type=neighborhood_type,
-                                                                                     global_empirical_measure=marginal_prob if ips.global_interaction else None)
-                        else:
-                            ode_rate[(source, target, neighborhood_type)] = gamma(source[changed_index],
-                                                                                  target[changed_index],
-                                                                                  source[changed_index],
-                                                                                  source[0],
-                                                                                  marginal_prob,
-                                                                                  root_type=neighborhood_type[changed_index],
-                                                                                  one_type=neighborhood_type[0])
-                elif ips.vertex_type_space is None and ips.edge_type_space is not None:
-                    for neighborhood_type in product(ips.edge_type_space, repeat=len(source)-1):
-                        if changed_index == 0:
-                            ode_rate[(source, target, neighborhood_type)] = ips.rate(source[0],
-                                                                                     target[0],
-                                                                                     source[1:],
-                                                                                     neighbors_edge_type=neighborhood_type,
-                                                                                     global_empirical_measure=marginal_prob if ips.global_interaction else None)
-                        else:
-                            ode_rate[(source, target, neighborhood_type)] = gamma(source[changed_index],
-                                                                                  target[changed_index],
-                                                                                  source[changed_index],
-                                                                                  source[0],
-                                                                                  marginal_prob,
-                                                                                  root_one_type=neighborhood_type[changed_index-1])
-
-        dp = np.zeros(p.size)
-        # calculate derivative according to ode_rate (ode = flux-in - flux-out)
-        for i in range(len(ode_state_space)):
             if ips.vertex_type_space is None and ips.edge_type_space is None:
-                state = ode_state_space[i]
-                flux_out = sum(marginal_prob[state] * ode_rate[(state, target)] for target in ode_state_space if one_coordinate_apart(state, target))
-                flux_in = sum(marginal_prob[source] * ode_rate[(source, state)] for source in ode_state_space if one_coordinate_apart(source, state))
-            elif ips.vertex_type_space is not None or ips.edge_type_space is not None:
-                (state, type) = index_to_ode_state_space[i]
-                flux_out = sum(marginal_prob[(state, type)] * ode_rate[(state, target, type)] for target in vertex_state_space if one_coordinate_apart(state, target))
-                flux_in = sum(marginal_prob[(source, type)] * ode_rate[(source, state, type)] for source in vertex_state_space if one_coordinate_apart(source, state))
+                # if the root jumped, return usual rate
+                if changed_index == 0:
+                    ode_rate.append(
+                        ips.rate(src[0], tgt[0], src[1:], meas=marginal_prob if ips.global_interaction else None))
+                # otherwise, take conditional rate
+                else:
+                    ode_rate.append(
+                        gamma(src[changed_index], tgt[changed_index], src[changed_index], src[0], marginal_prob))
 
-            dp[i] = flux_in - flux_out
+            elif ips.vertex_type_space is not None and ips.edge_type_space is None:
+                for neighborhood_type in product(ips.vertex_type_space, repeat=len(src)):
+                    if changed_index == 0:
+                        ode_rate.append(
+                            ips.rate(src[0],
+                                     tgt[0],
+                                     src[1:],
+                                     neighbors_vertex_type=neighborhood_type,
+                                     meas=marginal_prob if ips.global_interaction else None)
+                        )
+                    else:
+                        ode_rate.append(gamma(src[changed_index],
+                                              tgt[changed_index],
+                                              src[changed_index],
+                                              src[0],
+                                              marginal_prob,
+                                              root_type=neighborhood_type[changed_index],
+                                              one_type=neighborhood_type[0]))
+            elif ips.vertex_type_space is None and ips.edge_type_space is not None:
+                for neighborhood_type in product(ips.edge_type_space, repeat=len(src) - 1):
+                    if changed_index == 0:
+                        ode_rate.append(ips.rate(src[0],
+                                                 tgt[0],
+                                                 src[1:],
+                                                 neighbors_edge_type=neighborhood_type,
+                                                 meas=marginal_prob if ips.global_interaction else None))
+                    else:
+                        ode_rate.append(gamma(src[changed_index],
+                                              tgt[changed_index],
+                                              src[changed_index],
+                                              src[0],
+                                              marginal_prob,
+                                              root_one_type=neighborhood_type[changed_index - 1]))
 
-        # timestamp with datetime
-        print(f'******integration time: {t},   timestamp: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}')
-        return dp
+        sparse_Q_off_diag = csr_matrix((ode_rate, (rows, cols)),
+                                       shape=(len(ode_state_space), len(ode_state_space)))
+
+        row_sums = sparse_Q_off_diag.sum(axis=1).A.flatten()
+        sparse_Q = sparse_Q_off_diag - diags(row_sums, format='csr')
+
+        # print time
+        print(f"t = {t}")
+        return sparse_Q.transpose().dot(p)
 
     # calculate initial conditions on ode_state_space given i.i.d. initial conditions on vertices
     if ips.vertex_type_space is None and ips.edge_type_space is None:
-        ode_init = [initial_conditions[state[0]] * deg_dist[len(state)-1] * np.prod([initial_conditions[child] for child in state[1:]]) for state in ode_state_space]
+        ode_init = [initial_conditions[state[0]] * deg_dist[len(state) - 1] * np.prod(
+            [initial_conditions[child] for child in state[1:]]) for state in ode_state_space]
     elif ips.vertex_type_space is not None and ips.edge_type_space is None:
         ode_init = [
             initial_conditions[state[0]]
-            * deg_dist[len(state)-1]
+            * deg_dist[len(state) - 1]
             * np.prod([initial_conditions[child] for child in state[1:]])
             * np.prod([vertex_type_init[t] for t in type])
             for (state, type) in ode_state_space
@@ -306,7 +345,7 @@ def simulate_markov_lfe(
     elif ips.vertex_type_space is None and ips.edge_type_space is not None:
         ode_init = [
             initial_conditions[state[0]]
-            * deg_dist[len(state)-1]
+            * deg_dist[len(state) - 1]
             * np.prod([initial_conditions[child] for child in state[1:]])
             * np.prod([edge_type_init[t] for t in type]) / 2
             for (state, type) in ode_state_space
@@ -322,13 +361,13 @@ def simulate_markov_lfe(
 
 def simulate_markov_lfe_mf(
         ips: ParticleSystem,
-        initial_conditions: Dict[Any, float],
+        initial_conditions: dict[any, float],
         max_time: float,
         num_particles: int = 500,
         seed: int = 42,
         num_grid_points: int = 100,
-        gamma: Callable = None
-) -> Tuple[np.ndarray, np.ndarray, Dict[int, Tuple[Any]]]:
+        gamma: callable = None
+) -> tuple[np.ndarray, np.ndarray, dict[int, tuple[any]]]:
     # model parameters
     deg_dist = ips.get_empirical_degree_distribution()
     deg_supp = [i for (i, p) in deg_dist.items() if p > 0]
@@ -343,11 +382,12 @@ def simulate_markov_lfe_mf(
     ode_state_space_to_index = {state: i for i, state in index_to_ode_state_space.items()}
 
     if gamma is None:
-        # # define the Markov local-field jump rate
-        def gamma(source: Tuple, target: Tuple, root_state, one_state, marginal_prob: Dict[Tuple, float]) -> float:
+        # define the Markov local-field jump rate
+        def gamma(src: tuple, tgt: tuple, root_state, one_state, marginal_prob: dict[tuple, float]) -> float:
             numerator = sum(
                 (2 + len(remaining_state)) *
-                marginal_prob.get((root_state, one_state) + remaining_state, 0) * ips.rate(source, target, (one_state,) + remaining_state)
+                marginal_prob.get((root_state, one_state) + remaining_state, 0) * ips.rate(src, tgt, (
+                    one_state,) + remaining_state)
                 for k in deg_supp for remaining_state in product(ips.state_space, repeat=k - 1)
             )
             denominator = sum(
@@ -357,23 +397,23 @@ def simulate_markov_lfe_mf(
             return numerator / denominator if denominator > 0 else 0
 
     class MLFEParticleSystem(MeanFieldParticleSystem):
-        def __init__(self, ode_state_space: List[Any], num_particles: int, name: str = None):
+        def __init__(self, ode_state_space: list[any], num_particles: int, name: str = None):
             super().__init__(state_space=ode_state_space, num_particles=num_particles, name=name)
 
-        def rate(self, source_state: Any,
-                 target_state: Any,
-                 global_empirical_measure: Dict[Tuple[Any], float]) -> float:
-            for source, target in product(vertex_state_space, repeat=2):
-                if one_coordinate_apart(source, target):
-                    # find the index of the changed coordinate
-                    changed_index = next(i for i in range(len(source)) if source[i] != target[i])
+        def rate(self, src: any,
+                 tgt: any,
+                 meas: dict[tuple[any], float]) -> float:
+            if one_coordinate_apart(src, tgt):
+                # find the index of the changed coordinate
+                changed_index = next(i for i in range(len(src)) if src[i] != tgt[i])
 
-                    # if the root jumped, return usual rate
-                    if changed_index == 0:
-                        return ips.rate(source[0], target[0], source[1:])
-                    # otherwise, take conditional rate
-                    else:
-                        return gamma(source[changed_index], target[changed_index], source[changed_index], source[0], global_empirical_measure)
+                # if the root jumped, return usual rate
+                if changed_index == 0:
+                    return ips.rate(src[0], tgt[0], src[1:])
+                # otherwise, take conditional rate
+                else:
+                    return gamma(src[changed_index], tgt[changed_index], src[changed_index], src[0], meas)
+            return 0.0
 
     # calculate initial conditions on ode_state_space given i.i.d. initial conditions on vertices
     mf_init = {}
@@ -381,7 +421,9 @@ def simulate_markov_lfe_mf(
         # pick offspring number from degree distribution
         k = np.random.choice(deg_supp, p=[deg_dist[i] for i in deg_supp])
         # pick states for root and k leafs
-        init_state = tuple([np.random.choice(ips.state_space, p=[initial_conditions[s] for s in ips.state_space]) for _ in range(k + 1)])
+        init_state = tuple(
+            [np.random.choice(ips.state_space, p=[initial_conditions[s] for s in ips.state_space]) for _ in
+             range(k + 1)])
         # add to initial conditions
         mf_init[i] = init_state
 

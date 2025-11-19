@@ -4,22 +4,24 @@ import matplotlib.animation as animation
 from matplotlib.patches import Circle
 import numpy as np
 
-plt.rcParams['text.usetex'] = True
-plt.rcParams['font.family'] = 'Times New Roman'
+plt.rcParams["text.usetex"] = True
+plt.rcParams["font.family"] = "Times New Roman"
 
 
 class GraphDynamicsVisualizer:
-    def __init__(self,
-                 ips,
-                 jumps,
-                 initial_state,
-                 output_file='graph_dynamics.mp4',
-                 fps=30,
-                 duration=None,
-                 state_colors=None,
-                 title=None,
-                 ode_solution=None,
-                 fontsize_scale=1.0):
+    def __init__(
+        self,
+        ips,
+        jumps,
+        initial_state,
+        output_file="graph_dynamics.mp4",
+        fps=30,
+        duration=None,
+        state_colors=None,
+        title=None,
+        ode_solution=None,
+        fontsize_scale=1.0,
+    ):
         """
         Visualize graph dynamics and save as MP4.
 
@@ -69,11 +71,24 @@ class GraphDynamicsVisualizer:
         if state_colors is None:
             try:
                 from sparseips.visualization import get_color
-                self.state_colors = {state: get_color(i) for i, state in enumerate(ips.state_space)}
+
+                self.state_colors = {
+                    state: get_color(i) for i, state in enumerate(ips.state_space)
+                }
             except ImportError:
                 # Fallback if get_color not available
-                colors = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899']
-                self.state_colors = {state: colors[i % len(colors)] for i, state in enumerate(ips.state_space)}
+                colors = [
+                    "#3b82f6",
+                    "#ef4444",
+                    "#10b981",
+                    "#f59e0b",
+                    "#8b5cf6",
+                    "#ec4899",
+                ]
+                self.state_colors = {
+                    state: colors[i % len(colors)]
+                    for i, state in enumerate(ips.state_space)
+                }
         else:
             self.state_colors = state_colors
 
@@ -98,23 +113,34 @@ class GraphDynamicsVisualizer:
 
     def create_animation(self):
         """Create and save the animation."""
-        fig = plt.figure(figsize=(16, 9), facecolor='white')
+        fig = plt.figure(figsize=(16, 9), facecolor="white")
 
         # Create subplots: main graph on left, time series on right
         gs = fig.add_gridspec(1, 2, width_ratios=[2, 1], wspace=0.15)
         ax_graph = fig.add_subplot(gs[0])
         ax_timeseries = fig.add_subplot(gs[1])
 
-        ax_graph.set_facecolor('white')
-        ax_graph.axis('off')
-        ax_graph.set_title(self.title, fontsize=int(16 * self.fontsize_scale), family='Times New Roman', pad=20)
+        ax_graph.set_facecolor("white")
+        ax_graph.axis("off")
+        ax_graph.set_title(
+            self.title,
+            fontsize=int(16 * self.fontsize_scale),
+            family="Times New Roman",
+            pad=20,
+        )
 
         # Calculate total frames
         total_frames = int(self.duration * self.fps)
 
         # Draw edges once (they don't change)
-        nx.draw_networkx_edges(self.graph, self.pos, ax=ax_graph,
-                               edge_color='#666666', width=0.8, alpha=0.4)
+        nx.draw_networkx_edges(
+            self.graph,
+            self.pos,
+            ax=ax_graph,
+            edge_color="#666666",
+            width=0.8,
+            alpha=0.4,
+        )
 
         # Create node collection that we'll update
         node_artists = {}
@@ -123,34 +149,66 @@ class GraphDynamicsVisualizer:
         for node in self.graph.nodes():
             # Main node circle - use actual initial state
             initial_state = self.initial_states.get(node, 0)
-            circle = Circle(self.pos[node], radius=0.015,
-                            facecolor=self.state_colors.get(initial_state, 'gray'),
-                            edgecolor='black', linewidth=0.5, zorder=3)
+            circle = Circle(
+                self.pos[node],
+                radius=0.015,
+                facecolor=self.state_colors.get(initial_state, "gray"),
+                edgecolor="black",
+                linewidth=0.5,
+                zorder=3,
+            )
             ax_graph.add_patch(circle)
             node_artists[node] = circle
 
             # Animation ring (initially invisible)
-            ring = Circle(self.pos[node], radius=0.015,
-                          facecolor='none', edgecolor='black',
-                          linewidth=1.5, alpha=0, zorder=2)
+            ring = Circle(
+                self.pos[node],
+                radius=0.015,
+                facecolor="none",
+                edgecolor="black",
+                linewidth=1.5,
+                alpha=0,
+                zorder=2,
+            )
             ax_graph.add_patch(ring)
             ring_artists[node] = ring
 
         # Time text
-        time_text = ax_graph.text(0.02, 0.98, '', transform=ax_graph.transAxes,
-                                  fontsize=int(14 * self.fontsize_scale), color='black', family='Times New Roman',
-                                  verticalalignment='top')
+        time_text = ax_graph.text(
+            0.02,
+            0.98,
+            "",
+            transform=ax_graph.transAxes,
+            fontsize=int(14 * self.fontsize_scale),
+            color="black",
+            family="Times New Roman",
+            verticalalignment="top",
+        )
 
         # Legend for states
         legend_elements = []
         for state in self.state_space:
-            legend_elements.append(plt.Line2D([0], [0], marker='o', color='w',
-                                              markerfacecolor=self.state_colors[state],
-                                              markersize=10, label=f'State {state}',
-                                              markeredgecolor='black', markeredgewidth=0.5))
-        legend = ax_graph.legend(handles=legend_elements, loc='upper right',
-                                 framealpha=0.9, facecolor='white', edgecolor='black',
-                                 prop={'family': 'Times New Roman', 'size': int(11 * self.fontsize_scale)})
+            legend_elements.append(
+                plt.Line2D(
+                    [0],
+                    [0],
+                    marker="o",
+                    color="w",
+                    markerfacecolor=self.state_colors[state],
+                    markersize=10,
+                    label=f"State {state}",
+                    markeredgecolor="black",
+                    markeredgewidth=0.5,
+                )
+            )
+        legend = ax_graph.legend(
+            handles=legend_elements,
+            loc="upper right",
+            framealpha=0.9,
+            facecolor="white",
+            edgecolor="black",
+            prop={"family": "Times New Roman", "size": int(11 * self.fontsize_scale)},
+        )
 
         # Get actual bounds of the layout
         x_vals = [pos[0] for pos in self.pos.values()]
@@ -164,14 +222,20 @@ class GraphDynamicsVisualizer:
         y_range = y_max - y_min
         ax_graph.set_xlim(x_min - padding * x_range, x_max + padding * x_range)
         ax_graph.set_ylim(y_min - padding * y_range, y_max + padding * y_range)
-        ax_graph.set_aspect('equal')
+        ax_graph.set_aspect("equal")
 
         # Setup time series plot
-        ax_timeseries.set_facecolor('white')
+        ax_timeseries.set_facecolor("white")
         ax_timeseries.set_xlim(0, self.duration)
         ax_timeseries.set_ylim(0, 1)
-        ax_timeseries.set_xlabel('time', fontsize=int(12 * self.fontsize_scale), family='Times New Roman')
-        ax_timeseries.set_ylabel('state occupancy', fontsize=int(12 * self.fontsize_scale), family='Times New Roman')
+        ax_timeseries.set_xlabel(
+            "time", fontsize=int(12 * self.fontsize_scale), family="Times New Roman"
+        )
+        ax_timeseries.set_ylabel(
+            "state occupancy",
+            fontsize=int(12 * self.fontsize_scale),
+            family="Times New Roman",
+        )
         ax_timeseries.grid(True, alpha=0.3)
         ax_timeseries.tick_params(labelsize=int(10 * self.fontsize_scale))
 
@@ -183,25 +247,47 @@ class GraphDynamicsVisualizer:
 
         for state in self.state_space:
             # Simulation line (solid)
-            line, = ax_timeseries.plot([], [], color=self.state_colors[state],
-                                       linewidth=2, label=f'{state}')
+            (line,) = ax_timeseries.plot(
+                [], [], color=self.state_colors[state], linewidth=2, label=f"{state}"
+            )
             line_objects[state] = line
 
             # ODE line (dashed) if provided
             if self.ode_solution is not None:
-                ode_line, = ax_timeseries.plot([], [], color=self.state_colors[state],
-                                               linewidth=3, linestyle='--', alpha=0.7)
+                (ode_line,) = ax_timeseries.plot(
+                    [],
+                    [],
+                    color=self.state_colors[state],
+                    linewidth=3,
+                    linestyle="--",
+                    alpha=0.7,
+                )
                 ode_line_objects[state] = ode_line
 
         # Update legend to indicate simulation vs ODE
         if self.ode_solution is not None:
             legend_handles = [
-                plt.Line2D([0], [0], color='black', linewidth=2, label='Monte Carlo'),
-                plt.Line2D([0], [0], color='black', linewidth=2, linestyle='--', label='Local-field prediction')
+                plt.Line2D([0], [0], color="black", linewidth=2, label="Monte Carlo"),
+                plt.Line2D(
+                    [0],
+                    [0],
+                    color="black",
+                    linewidth=2,
+                    linestyle="--",
+                    label="Local-field prediction",
+                ),
             ]
-            ax_timeseries.legend(handles=legend_handles, loc='upper left', framealpha=0.9,
-                                 facecolor='white', edgecolor='black',
-                                 prop={'family': 'Times New Roman', 'size': int(10 * self.fontsize_scale)})
+            ax_timeseries.legend(
+                handles=legend_handles,
+                loc="upper left",
+                framealpha=0.9,
+                facecolor="white",
+                edgecolor="black",
+                prop={
+                    "family": "Times New Roman",
+                    "size": int(10 * self.fontsize_scale),
+                },
+            )
         # else:
         #     ax_timeseries.legend(loc='upper left', framealpha=0.9,
         #                          facecolor='white', edgecolor='black',
@@ -217,7 +303,7 @@ class GraphDynamicsVisualizer:
             # Update nodes
             for node in self.graph.nodes():
                 state = states[node]
-                color = self.state_colors.get(state, 'gray')
+                color = self.state_colors.get(state, "gray")
                 node_artists[node].set_facecolor(color)
 
                 # Update animation ring for recent changes
@@ -233,7 +319,7 @@ class GraphDynamicsVisualizer:
                     ring_artists[node].set_alpha(0)
 
             # Update time text
-            time_text.set_text(f't = {t:.2f}s')
+            time_text.set_text(f"t = {t:.2f}s")
 
             # Update time series
             time_history.append(t)
@@ -250,36 +336,46 @@ class GraphDynamicsVisualizer:
                 line_objects[state].set_data(time_history, occupancy_history[state])
 
             # Update ODE lines if provided
-            artists_to_return = (list(node_artists.values()) + list(ring_artists.values()) +
-                                 [time_text] + list(line_objects.values()))
+            artists_to_return = (
+                list(node_artists.values())
+                + list(ring_artists.values())
+                + [time_text]
+                + list(line_objects.values())
+            )
 
             if self.ode_solution is not None:
                 for i, state in enumerate(self.state_space):
                     # Get ODE data up to current frame
-                    ode_line_objects[state].set_data(time_history, self.ode_solution[i, :len(time_history)])
+                    ode_line_objects[state].set_data(
+                        time_history, self.ode_solution[i, : len(time_history)]
+                    )
                 artists_to_return += list(ode_line_objects.values())
 
             return artists_to_return
 
         # Create animation
-        anim = animation.FuncAnimation(fig, update, frames=total_frames,
-                                       interval=1000 / self.fps, blit=True)
+        anim = animation.FuncAnimation(
+            fig, update, frames=total_frames, interval=1000 / self.fps, blit=True
+        )
 
         # Save as MP4
         print(f"Generating {total_frames} frames at {self.fps} FPS...")
 
         # Try ffmpeg first, fall back to pillow if not available
         try:
-            Writer = animation.writers['ffmpeg']
-            writer = Writer(fps=self.fps, bitrate=2000,
-                            extra_args=['-vcodec', 'libx264', '-pix_fmt', 'yuv420p'])
+            Writer = animation.writers["ffmpeg"]
+            writer = Writer(
+                fps=self.fps,
+                bitrate=2000,
+                extra_args=["-vcodec", "libx264", "-pix_fmt", "yuv420p"],
+            )
             anim.save(self.output_file, writer=writer, dpi=100)
             print(f"Video saved to {self.output_file}")
         except (KeyError, RuntimeError) as e:
             print("ffmpeg not found. Trying pillow writer (will save as GIF)...")
             try:
                 # Change extension to .gif
-                gif_file = self.output_file.replace('.mp4', '.gif')
+                gif_file = self.output_file.replace(".mp4", ".gif")
                 Writer = animation.PillowWriter(fps=self.fps)
                 anim.save(gif_file, writer=Writer, dpi=100)
                 print(f"Animation saved as GIF to {gif_file}")
