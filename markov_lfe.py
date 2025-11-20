@@ -8,6 +8,8 @@ import jax.debug
 from jax.experimental import sparse
 import jax.numpy as jnp
 import diffrax
+import lineax as lx
+import optimistix as optx
 
 from itertools import product
 from collections import Counter
@@ -186,7 +188,7 @@ def compute_gamma(ips, deg_supp):
         def gamma(src: tuple, tgt: tuple, root_state, one_state, marginal_prob: dict[tuple, float],
                   root_one_type) -> float:
             numerator = sum(
-                (2 + len(remaining_state)) *
+                (1 + len(remaining_state)) *
                 marginal_prob[((root_state, one_state) + remaining_state, (root_one_type,) + remaining_type)]
                 * ips.rate(src, tgt, (one_state,) + remaining_state,
                            neighbors_edge_type=(root_one_type,) + remaining_type,
@@ -196,7 +198,7 @@ def compute_gamma(ips, deg_supp):
                 for remaining_type in product(ips.edge_type_space, repeat=k - 1)
             )
             denominator = sum(
-                (2 + len(remaining_state)) * marginal_prob[
+                (1 + len(remaining_state)) * marginal_prob[
                     ((root_state, one_state) + remaining_state, (root_one_type,) + remaining_type)]
                 for k in deg_supp
                 for remaining_state in product(ips.state_space, repeat=k - 1)
@@ -249,7 +251,7 @@ def gamma_logic_func_builder(ips, src, tgt, root_state, one_state, root_type=Non
         ]
 
 
-def build_static_maps(ips, deg_supp, ode_state_space, vertex_state_space, ode_state_to_index, gamma_logic_func,
+def build_static_maps(ips, ode_state_space, vertex_state_space, ode_state_to_index, gamma_logic_func,
                       vertex_type_space=None, edge_type_space=None):
     """
     Analyzes the graph structure and returns static arrays for JAX.
@@ -354,8 +356,7 @@ def build_static_maps(ips, deg_supp, ode_state_space, vertex_state_space, ode_st
 
                         if src[0] != tgt[0]:
                             root_jump_indices.append(transition_idx)
-                            root_rates.append(ips.rate(src[0], tgt[0], src[1:],
-                                                       neighbors_edge_type=neighbor_types))
+                            root_rates.append(ips.rate(src[0], tgt[0], src[1:], neighbors_edge_type=neighbor_types))
                         # leaf jump
                         else:
                             # NEIGHBOR JUMP (Uses Gamma)
@@ -364,7 +365,7 @@ def build_static_maps(ips, deg_supp, ode_state_space, vertex_state_space, ode_st
                             # compute tuples (weight, rate, state) needed for gamma calculation
                             changed_index = next(i for i in range(len(src)) if src[i] != tgt[i])
                             needed_terms = gamma_logic_func(ips, src[changed_index], tgt[changed_index], src[0], tgt[0],
-                                                            root_one_type=neighbor_types[changed_index-1])
+                                                            root_one_type=neighbor_types[changed_index - 1])
 
                             term_indices = [ode_state_to_index[s] for w, r, s in needed_terms]
                             term_rates = [r for w, r, s in needed_terms]
@@ -411,7 +412,7 @@ def build_static_maps(ips, deg_supp, ode_state_space, vertex_state_space, ode_st
 
 def print_progress(t):
     """Standard Python function to execute the print action."""
-    print(f"Time: {t:.4f}")
+    print(f"**** Time: {t}")
 
 
 def mlfe_vector_field(t, p, args):
@@ -481,7 +482,8 @@ def simulate_markov_lfe(
         vertex_type_init: dict[any, float] = None,
         edge_type_init: dict[any, float] = None,
         num_grid_points: int = 100,
-        gamma: callable = None,
+        solver_type: str = 'explicit',
+        step_control: str = 'constant',
 ) -> tuple[np.ndarray, np.ndarray, dict[int, tuple[any]]]:
     # model parameters
     deg_dist = ips.get_empirical_degree_distribution()
@@ -515,9 +517,10 @@ def simulate_markov_lfe(
 
     # build args for JIT-compiled rate matrix function
     print('**** Building rate matrix structure ****')
-    static_args, _ = build_static_maps(ips, deg_supp, ode_state_space, vertex_state_space, ode_state_space_to_index,
-                                       gamma_logic_func_builder, vertex_type_space=vertex_type_space if ips.vertex_type_space is not None else None,
-                                        edge_type_space=edge_type_space if ips.edge_type_space is not None else None)
+    static_args, _ = build_static_maps(ips, ode_state_space, vertex_state_space, ode_state_space_to_index,
+                                       gamma_logic_func_builder,
+                                       vertex_type_space=vertex_type_space if ips.vertex_type_space is not None else None,
+                                       edge_type_space=edge_type_space if ips.edge_type_space is not None else None)
 
     # calculate initial conditions on ode_state_space given i.i.d. initial conditions on vertices
     if ips.vertex_type_space is None and ips.edge_type_space is None:
@@ -543,13 +546,36 @@ def simulate_markov_lfe(
     y0 = jnp.array(ode_init)
 
     term = diffrax.ODETerm(mlfe_vector_field)
-    solver = diffrax.Dopri5()
+
+    if solver_type == 'implicit':
+        linear_solver = lx.GMRES(
+            rtol=1e-3,
+            atol=1e-3,
+            restart=20  # Number of iterations before restarting (tuning parameter)
+        )
+
+        root_finder = optx.Newton(
+            rtol=1e-3,
+            atol=1e-3,
+            linear_solver=linear_solver  # Inject GMRES here
+        )
+
+        solver = diffrax.Kvaerno3(root_finder=root_finder)
+    elif solver_type == 'explicit':
+        solver = diffrax.Dopri5()
+    else:
+        raise ValueError(f'Unknown solver type: {solver_type}')
 
     # Define output times
     saveat = diffrax.SaveAt(ts=jnp.linspace(0, max_time, num_grid_points))
 
     # PID Controller is CRITICAL for stiff systems
-    step_controller = diffrax.PIDController(rtol=1e-5, atol=1e-6)
+    if step_control == 'adative':
+        step_controller = diffrax.PDController(rtol=1e-3, atol=1e-3)
+    elif step_control == 'constant':
+        step_controller = diffrax.ConstantStepSize()
+    else:
+        raise ValueError(f'Unknown step control type: {step_control}')
 
     # 4. RUN
     print('**** Running simulation ****')
