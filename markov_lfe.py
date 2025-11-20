@@ -3,11 +3,14 @@ from sparseips.ips_class import ParticleSystem, MeanFieldParticleSystem
 from sparseips.jump_ips_sim import simulate_mean_field_jump_process, get_particle_states_at_times
 from scipy.integrate import solve_ivp
 from scipy.sparse import csr_matrix, diags
+
+from jax.experimental import sparse
+import jax.numpy as jnp
+
 from itertools import product
 from collections import Counter
 from datetime import datetime
 
-import jax
 
 
 # TODO: fix reduced mlfe
@@ -139,6 +142,78 @@ def one_coordinate_apart(tuple1: tuple, tuple2: tuple) -> bool:
     return len(tuple1) == len(tuple2) and sum(x != y for x, y in zip(tuple1, tuple2)) == 1
 
 
+def compute_gamma(ips, deg_supp):
+    if ips.vertex_type_space is None and ips.edge_type_space is None:
+        def gamma(src: tuple, tgt: tuple, root_state, one_state, marginal_prob: dict[tuple, float],
+                  **kwargs) -> float:
+            numerator = sum(
+                (1 + len(remaining_state)) *
+                marginal_prob[(root_state, one_state) + remaining_state] *
+                ips.rate(src, tgt, (one_state,) + remaining_state,
+                         meas=marginal_prob if ips.global_interaction else None)
+                for k in deg_supp for remaining_state in product(ips.state_space, repeat=k - 1)
+            )
+            denominator = sum(
+                (1 + len(remaining_state)) * marginal_prob[(root_state, one_state) + remaining_state]
+                for k in deg_supp for remaining_state in product(ips.state_space, repeat=k - 1)
+            )
+            return numerator / denominator if denominator > 0 else 0
+
+    elif ips.vertex_type_space is not None and ips.edge_type_space is None:
+        def gamma(src: tuple, tgt: tuple, root_state, one_state, marginal_prob: dict[tuple, float], root_type,
+                  one_type) -> float:
+            numerator = sum(
+                (2 + len(remaining_state)) *
+                marginal_prob[((root_state, one_state) + remaining_state, (root_type, one_type) + remaining_type)]
+                * ips.rate(src, tgt, (one_state,) + remaining_state,
+                           neighbors_vertex_type=(root_type, one_type) + remaining_type,
+                           meas=marginal_prob if ips.global_interaction else None)
+                for k in deg_supp
+                for remaining_state in product(ips.state_space, repeat=k - 1)
+                for remaining_type in product(ips.vertex_type_space, repeat=k - 1)
+            )
+            denominator = sum(
+                (2 + len(remaining_state)) * marginal_prob[
+                    ((root_state, one_state) + remaining_state, (root_type, one_type) + remaining_type)]
+                for k in deg_supp
+                for remaining_state in product(ips.state_space, repeat=k - 1)
+                for remaining_type in product(ips.vertex_type_space, repeat=k - 1)
+            )
+            return numerator / denominator if denominator > 0 else 0
+
+    elif ips.vertex_type_space is None and ips.edge_type_space is not None:
+        def gamma(src: tuple, tgt: tuple, root_state, one_state, marginal_prob: dict[tuple, float],
+                  root_one_type) -> float:
+            numerator = sum(
+                (2 + len(remaining_state)) *
+                marginal_prob[((root_state, one_state) + remaining_state, (root_one_type,) + remaining_type)]
+                * ips.rate(src, tgt, (one_state,) + remaining_state,
+                           neighbors_edge_type=(root_one_type,) + remaining_type,
+                           meas=marginal_prob if ips.global_interaction else None)
+                for k in deg_supp
+                for remaining_state in product(ips.state_space, repeat=k - 1)
+                for remaining_type in product(ips.edge_type_space, repeat=k - 1)
+            )
+            denominator = sum(
+                (2 + len(remaining_state)) * marginal_prob[
+                    ((root_state, one_state) + remaining_state, (root_one_type,) + remaining_type)]
+                for k in deg_supp
+                for remaining_state in product(ips.state_space, repeat=k - 1)
+                for remaining_type in product(ips.edge_type_space, repeat=k - 1)
+            )
+            return numerator / denominator if denominator > 0 else 0
+
+    return gamma
+
+
+def sparse_diag(data: jnp.ndarray, size: int) -> sparse.BCOO:
+    range_n = jnp.arange(size)
+    indices = jnp.stack([range_n, range_n], axis=1)
+
+    # --- Create BCOO Matrix ---
+    return sparse.BCOO((data, indices), shape=(size, size))
+
+
 def simulate_markov_lfe(
         ips: ParticleSystem,
         initial_conditions: dict[any, float],
@@ -178,67 +253,7 @@ def simulate_markov_lfe(
     index_to_ode_state_space = {i: state for i, state in enumerate(ode_state_space)}
     ode_state_space_to_index = {state: i for i, state in enumerate(ode_state_space)}
 
-    # define the Markov local-field jump rate
-    if gamma is None:
-        if ips.vertex_type_space is None and ips.edge_type_space is None:
-            def gamma(src: tuple, tgt: tuple, root_state, one_state, marginal_prob: dict[tuple, float],
-                      **kwargs) -> float:
-                numerator = sum(
-                    (1 + len(remaining_state)) *
-                    marginal_prob[(root_state, one_state) + remaining_state] *
-                    ips.rate(src, tgt, (one_state,) + remaining_state,
-                             meas=marginal_prob if ips.global_interaction else None)
-                    for k in deg_supp for remaining_state in product(ips.state_space, repeat=k - 1)
-                )
-                denominator = sum(
-                    (1 + len(remaining_state)) * marginal_prob[(root_state, one_state) + remaining_state]
-                    for k in deg_supp for remaining_state in product(ips.state_space, repeat=k - 1)
-                )
-                return numerator / denominator if denominator > 0 else 0
-
-        elif ips.vertex_type_space is not None and ips.edge_type_space is None:
-            def gamma(src: tuple, tgt: tuple, root_state, one_state, marginal_prob: dict[tuple, float], root_type,
-                      one_type) -> float:
-                numerator = sum(
-                    (2 + len(remaining_state)) *
-                    marginal_prob[((root_state, one_state) + remaining_state, (root_type, one_type) + remaining_type)]
-                    * ips.rate(src, tgt, (one_state,) + remaining_state,
-                               neighbors_vertex_type=(root_type, one_type) + remaining_type,
-                               meas=marginal_prob if ips.global_interaction else None)
-                    for k in deg_supp
-                    for remaining_state in product(ips.state_space, repeat=k - 1)
-                    for remaining_type in product(ips.vertex_type_space, repeat=k - 1)
-                )
-                denominator = sum(
-                    (2 + len(remaining_state)) * marginal_prob[
-                        ((root_state, one_state) + remaining_state, (root_type, one_type) + remaining_type)]
-                    for k in deg_supp
-                    for remaining_state in product(ips.state_space, repeat=k - 1)
-                    for remaining_type in product(ips.vertex_type_space, repeat=k - 1)
-                )
-                return numerator / denominator if denominator > 0 else 0
-
-        elif ips.vertex_type_space is None and ips.edge_type_space is not None:
-            def gamma(src: tuple, tgt: tuple, root_state, one_state, marginal_prob: dict[tuple, float],
-                      root_one_type) -> float:
-                numerator = sum(
-                    (2 + len(remaining_state)) *
-                    marginal_prob[((root_state, one_state) + remaining_state, (root_one_type,) + remaining_type)]
-                    * ips.rate(src, tgt, (one_state,) + remaining_state,
-                               neighbors_edge_type=(root_one_type,) + remaining_type,
-                               meas=marginal_prob if ips.global_interaction else None)
-                    for k in deg_supp
-                    for remaining_state in product(ips.state_space, repeat=k - 1)
-                    for remaining_type in product(ips.edge_type_space, repeat=k - 1)
-                )
-                denominator = sum(
-                    (2 + len(remaining_state)) * marginal_prob[
-                        ((root_state, one_state) + remaining_state, (root_one_type,) + remaining_type)]
-                    for k in deg_supp
-                    for remaining_state in product(ips.state_space, repeat=k - 1)
-                    for remaining_type in product(ips.edge_type_space, repeat=k - 1)
-                )
-                return numerator / denominator if denominator > 0 else 0
+    gamma = compute_gamma(ips, deg_supp)
 
     # identify non-zero transitions rates
     # TODO: further reduce allowable transitions
@@ -261,9 +276,7 @@ def simulate_markov_lfe(
                         rows.append(ode_state_space_to_index[(src, neighbors_types)])
                         cols.append(ode_state_space_to_index[(tgt, neighbors_types)])
 
-    # store sparse matrix (initialize the first iteration)
-    sparse_Q_off_diag = csr_matrix(([0] * len(rows), (rows, cols)),
-                                   shape=(len(ode_state_space), len(ode_state_space)))
+    sparse_indices = jnp.array([[rows[i], cols[i]] for i in range(len(rows))])
 
     def mlfe_ode(t, p):
         # convert p to dictionary from ode_state_space to probabilities
@@ -328,14 +341,14 @@ def simulate_markov_lfe(
                                           marginal_prob,
                                           root_one_type=src[1][changed_index - 1]))
 
-        sparse_Q_off_diag.data = np.array(ode_rate)
+        sparse_Q_off_diag = sparse.BCOO((jnp.array(ode_rate), sparse_indices), shape=(len(ode_state_space), len(ode_state_space)))
 
-        row_sums = sparse_Q_off_diag.sum(axis=1).A.flatten()
-        sparse_Q = sparse_Q_off_diag - diags(row_sums, format='csr')
+        row_sums = sparse.bcoo_reduce_sum(sparse_Q_off_diag, axes=[1]).todense().reshape(-1)
+        sparse_Q = sparse_Q_off_diag - sparse_diag(row_sums, len(ode_state_space))
 
         # print time
         print(f"t = {t}")
-        return sparse_Q.transpose().dot(p)
+        return sparse_Q.transpose() @ p
 
     # calculate initial conditions on ode_state_space given i.i.d. initial conditions on vertices
     if ips.vertex_type_space is None and ips.edge_type_space is None:
