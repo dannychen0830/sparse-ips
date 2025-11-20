@@ -309,7 +309,7 @@ def build_static_maps(ips, deg_supp, ode_state_space, vertex_state_space, ode_st
                     gamma_dependency_indices.append(term_indices)
                     gamma_weights.append(term_weights)
                     gamma_rates.append(term_rates)
-            elif ips.vertex_type_space is not None or ips.edge_type_space is not None:
+            elif ips.vertex_type_space is not None or ips.edge_type_space is None:
                 for neighbor_types in vertex_type_space:
                     if len(neighbor_types) == len(src):
 
@@ -344,17 +344,17 @@ def build_static_maps(ips, deg_supp, ode_state_space, vertex_state_space, ode_st
 
             elif ips.vertex_type_space is None and ips.edge_type_space is not None:
                 for neighbor_types in edge_type_space:
-
-                    transition_idx += 1
-                    row_idx = ode_state_to_index[src]
-                    col_idx = ode_state_to_index[tgt]
-                    rows.append(row_idx)
-                    cols.append(col_idx)
-
                     if len(neighbor_types) == len(src) - 1:
+
+                        transition_idx += 1
+                        row_idx = ode_state_to_index[(src, neighbor_types)]
+                        col_idx = ode_state_to_index[(tgt, neighbor_types)]
+                        rows.append(row_idx)
+                        cols.append(col_idx)
+
                         if src[0] != tgt[0]:
                             root_jump_indices.append(transition_idx)
-                            root_rates.append(ips.rate(src[0] + neighbor_types, tgt[0], src[1:],
+                            root_rates.append(ips.rate(src[0], tgt[0], src[1:],
                                                        neighbors_edge_type=neighbor_types))
                         # leaf jump
                         else:
@@ -364,7 +364,7 @@ def build_static_maps(ips, deg_supp, ode_state_space, vertex_state_space, ode_st
                             # compute tuples (weight, rate, state) needed for gamma calculation
                             changed_index = next(i for i in range(len(src)) if src[i] != tgt[i])
                             needed_terms = gamma_logic_func(ips, src[changed_index], tgt[changed_index], src[0], tgt[0],
-                                                            root_one_type=neighbor_types[changed_index])
+                                                            root_one_type=neighbor_types[changed_index-1])
 
                             term_indices = [ode_state_to_index[s] for w, r, s in needed_terms]
                             term_rates = [r for w, r, s in needed_terms]
@@ -512,27 +512,6 @@ def simulate_markov_lfe(
 
     index_to_ode_state_space = {i: state for i, state in enumerate(ode_state_space)}
     ode_state_space_to_index = {state: i for i, state in enumerate(ode_state_space)}
-
-    # identify non-zero transitions rates
-    # TODO: further reduce allowable transitions
-    # rows = []
-    # cols = []
-    #
-    # for src, tgt in product(vertex_state_space, repeat=2):
-    #     if one_coordinate_apart(src, tgt):
-    #         if ips.vertex_type_space is None and ips.edge_type_space is None:
-    #             rows.append(ode_state_space_to_index[src])
-    #             cols.append(ode_state_space_to_index[tgt])
-    #         elif ips.vertex_type_space is not None and ips.edge_type_space is None:
-    #             for neighbors_types in vertex_type_space:
-    #                 if len(src) == len(neighbors_types):
-    #                     rows.append(ode_state_space_to_index[(src, neighbors_types)])
-    #                     cols.append(ode_state_space_to_index[(tgt, neighbors_types)])
-    #         elif ips.vertex_type_space is None and ips.edge_type_space is not None:
-    #             for neighbors_types in edge_type_space:
-    #                 if len(src) == len(neighbors_types) - 1:
-    #                     rows.append(ode_state_space_to_index[(src, neighbors_types)])
-    #                     cols.append(ode_state_space_to_index[(tgt, neighbors_types)])
 
     # build args for JIT-compiled rate matrix function
     print('**** Building rate matrix structure ****')
