@@ -4,13 +4,14 @@ from sparseips.jump_ips_sim import simulate_mean_field_jump_process, get_particl
 from scipy.integrate import solve_ivp
 from scipy.sparse import csr_matrix, diags
 
+import jax.debug
 from jax.experimental import sparse
 import jax.numpy as jnp
+import diffrax
 
 from itertools import product
 from collections import Counter
 from datetime import datetime
-
 
 
 # TODO: fix reduced mlfe
@@ -214,6 +215,265 @@ def sparse_diag(data: jnp.ndarray, size: int) -> sparse.BCOO:
     return sparse.BCOO((data, indices), shape=(size, size))
 
 
+def gamma_logic_func_builder(ips, src, tgt, root_state, one_state, root_type=None, one_type=None, root_one_type=None):
+    # print('****warning: global interaction is not considered in this function****')
+
+    if ips.vertex_type_space is None and ips.edge_type_space is None:
+        return [
+            [(1 + len(remaining_state)),
+             ips.rate(src, tgt, (one_state,) + remaining_state),
+             (root_state, one_state) + remaining_state]
+            for k in ips.deg_supp for remaining_state in product(ips.state_space, repeat=k - 1)
+        ]
+
+    elif ips.vertex_type_space is not None and ips.edge_type_space is None:
+        return [
+            [(1 + len(remaining_state)),
+             ips.rate(src, tgt, (one_state,) + remaining_state,
+                      neighbors_vertex_type=(root_type, one_type) + remaining_type),
+             ((root_state, one_state) + remaining_state, (root_type, one_type) + remaining_type)]
+
+            for k in ips.deg_supp
+            for remaining_state in product(ips.state_space, repeat=k - 1)
+            for remaining_type in product(ips.vertex_type_space, repeat=k - 1)
+        ]
+
+    elif ips.vertex_type_space is None and ips.edge_type_space is not None:
+        return [
+            [(1 + len(remaining_state)),
+             ips.rate(src, tgt, (one_state,) + remaining_state, neighbors_edge_type=(root_one_type,) + remaining_type),
+             ((root_state, one_state) + remaining_state, (root_one_type,) + remaining_type)]
+            for k in ips.deg_supp
+            for remaining_state in product(ips.state_space, repeat=k - 1)
+            for remaining_type in product(ips.edge_type_space, repeat=k - 1)
+        ]
+
+
+def build_static_maps(ips, deg_supp, ode_state_space, vertex_state_space, ode_state_to_index, gamma_logic_func,
+                      vertex_type_space=None, edge_type_space=None):
+    """
+    Analyzes the graph structure and returns static arrays for JAX.
+    """
+    rows = []
+    cols = []
+
+    # Lists to store data needed for Root Jumps vs Neighbor Jumps
+    # We split them because they have different rate calculations
+    root_jump_indices = []  # Indices in 'rows' that are root jumps
+    neighbor_jump_indices = []  # Indices in 'rows' that are neighbor jumps (use gamma)
+
+    root_rates = []
+
+    # Data for Gamma Calculation (Neighbor Jumps)
+    # We need a list of lists, where each sublist contains the p-indices
+    # needed to compute the sum for that specific transition.
+    gamma_dependency_indices = []
+    gamma_weights = []
+    gamma_rates = []
+
+    # Data for Root Calculation
+    root_rate_params = []  # Store static args for ips.rate if needed
+
+    # 1. Iterate ALL transitions (Python Loop - Runs ONCE)
+    transition_idx = -1
+    for src, tgt in product(vertex_state_space, repeat=2):
+        is_valid_transition = one_coordinate_apart(src, tgt)
+
+        if is_valid_transition:
+            # TODO: a lot of duplicate code here... bad!!!
+            # determine jump type
+            if ips.vertex_type_space is None and ips.edge_type_space is None:
+                transition_idx += 1
+                row_idx = ode_state_to_index[src]
+                col_idx = ode_state_to_index[tgt]
+                rows.append(row_idx)
+                cols.append(col_idx)
+
+                # root jump
+                if src[0] != tgt[0]:
+                    root_jump_indices.append(transition_idx)
+                    root_rates.append(ips.rate(src[0], tgt[0], src[1:]))
+                # leaf jump
+                else:
+                    # NEIGHBOR JUMP (Uses Gamma)
+                    neighbor_jump_indices.append(transition_idx)
+
+                    # compute tuples (weight, rate, state) needed for gamma calculation
+                    changed_index = next(i for i in range(len(src)) if src[i] != tgt[i])
+                    needed_terms = gamma_logic_func(ips, src[changed_index], tgt[changed_index], src[0], tgt[0])
+
+                    term_indices = [ode_state_to_index[s] for w, r, s in needed_terms]
+                    term_rates = [r for w, r, s in needed_terms]
+                    term_weights = [w for w, r, s in needed_terms]
+
+                    gamma_dependency_indices.append(term_indices)
+                    gamma_weights.append(term_weights)
+                    gamma_rates.append(term_rates)
+            elif ips.vertex_type_space is not None or ips.edge_type_space is not None:
+                for neighbor_types in vertex_type_space:
+                    if len(neighbor_types) == len(src):
+
+                        transition_idx += 1
+                        row_idx = ode_state_to_index[(src, neighbor_types)]
+                        col_idx = ode_state_to_index[(tgt, neighbor_types)]
+                        rows.append(row_idx)
+                        cols.append(col_idx)
+
+                        if src[0] != tgt[0]:
+                            root_jump_indices.append(transition_idx)
+                            root_rates.append(ips.rate(src[0], tgt[0], src[1:],
+                                                       neighbors_vertex_type=neighbor_types))
+                        # leaf jump
+                        else:
+                            # NEIGHBOR JUMP (Uses Gamma)
+                            neighbor_jump_indices.append(transition_idx)
+
+                            # compute tuples (weight, rate, state) needed for gamma calculation
+                            changed_index = next(i for i in range(len(src)) if src[i] != tgt[i])
+                            needed_terms = gamma_logic_func(ips, src[changed_index], tgt[changed_index], src[0], tgt[0],
+                                                            root_type=neighbor_types[changed_index],
+                                                            one_type=neighbor_types[0])
+
+                            term_indices = [ode_state_to_index[s] for w, r, s in needed_terms]
+                            term_rates = [r for w, r, s in needed_terms]
+                            term_weights = [w for w, r, s in needed_terms]
+
+                            gamma_dependency_indices.append(term_indices)
+                            gamma_weights.append(term_weights)
+                            gamma_rates.append(term_rates)
+
+            elif ips.vertex_type_space is None and ips.edge_type_space is not None:
+                for neighbor_types in edge_type_space:
+
+                    transition_idx += 1
+                    row_idx = ode_state_to_index[src]
+                    col_idx = ode_state_to_index[tgt]
+                    rows.append(row_idx)
+                    cols.append(col_idx)
+
+                    if len(neighbor_types) == len(src) - 1:
+                        if src[0] != tgt[0]:
+                            root_jump_indices.append(transition_idx)
+                            root_rates.append(ips.rate(src[0] + neighbor_types, tgt[0], src[1:],
+                                                       neighbors_edge_type=neighbor_types))
+                        # leaf jump
+                        else:
+                            # NEIGHBOR JUMP (Uses Gamma)
+                            neighbor_jump_indices.append(transition_idx)
+
+                            # compute tuples (weight, rate, state) needed for gamma calculation
+                            changed_index = next(i for i in range(len(src)) if src[i] != tgt[i])
+                            needed_terms = gamma_logic_func(ips, src[changed_index], tgt[changed_index], src[0], tgt[0],
+                                                            root_one_type=neighbor_types[changed_index])
+
+                            term_indices = [ode_state_to_index[s] for w, r, s in needed_terms]
+                            term_rates = [r for w, r, s in needed_terms]
+                            term_weights = [w for w, r, s in needed_terms]
+
+                            gamma_dependency_indices.append(term_indices)
+                            gamma_weights.append(term_weights)
+                            gamma_rates.append(term_rates)
+
+    # Find max number of terms in any gamma sum
+    max_terms = max(len(x) for x in gamma_dependency_indices) if gamma_dependency_indices else 0
+
+    # Create padded arrays
+    num_neighbor_jumps = len(neighbor_jump_indices)
+    padded_indices = np.zeros((num_neighbor_jumps, max_terms), dtype=np.int32)
+    padded_weights = np.zeros((num_neighbor_jumps, max_terms), dtype=np.float64)
+    padded_rates = np.zeros((num_neighbor_jumps, max_terms), dtype=np.float64)
+
+    for i in range(num_neighbor_jumps):
+        terms = gamma_dependency_indices[i]
+        padded_indices[i, :len(terms)] = terms
+        padded_weights[i, :len(terms)] = gamma_weights[i]
+        padded_rates[i, :len(terms)] = gamma_rates[i]
+        # Remaining slots are 0 index and 0.0 weight (no effect)
+
+    # Bundle everything into a struct or dict
+    static_args = {
+        "rows": jnp.array(rows),
+        "cols": jnp.array(cols),
+        "root_idx_map": jnp.array(root_jump_indices),
+        "root_rates": jnp.array(root_rates),
+        "neigh_idx_map": jnp.array(neighbor_jump_indices),
+        "gamma_indices": jnp.array(padded_indices),
+        "gamma_rates": jnp.array(padded_rates),
+        "gamma_weights": jnp.array(padded_weights),
+        "num_states": len(ode_state_space)
+    }
+
+    # Also return the fixed structure for the sparse matrix
+    sparse_indices = jnp.stack([static_args["rows"], static_args["cols"]], axis=1)
+
+    return static_args, sparse_indices
+
+
+def print_progress(t):
+    """Standard Python function to execute the print action."""
+    print(f"Time: {t:.4f}")
+
+
+def mlfe_vector_field(t, p, args):
+    """
+    Calculates dp/dt entirely using vector operations.
+    """
+    jax.debug.callback(print_progress, t)
+
+    # Unpack static args
+    gamma_indices = args["gamma_indices"]  # Shape: (Num_Neigh_Jumps, Max_Terms)
+    gamma_weights = args["gamma_weights"]  # Shape: (Num_Neigh_Jumps, Max_Terms)
+    gamma_rates = args["gamma_rates"]  # Shape: (Num_Neigh_Jumps, Max_Terms)
+
+    # -------------------------------------------------
+    # 1. Calculate Gamma Rates (Vectorized)
+    # -------------------------------------------------
+    # Gather probabilities for all terms in all gamma sums simultaneously
+    # Shape: (Num_Neigh_Jumps, Max_Terms)
+    term_probs = p[gamma_indices]
+
+    # Calculate Denominators (Sum of weight * prob)
+    denom_terms = term_probs * gamma_weights
+    denoms = jnp.sum(denom_terms, axis=1)
+
+    # Calculate Numerators
+    # If ips.rate is constant, it's already in weights.
+    # If ips.rate depends on 'p', you calculate it here similarly using vector ops.
+    num_terms = denom_terms * gamma_rates
+    nums = jnp.sum(num_terms, axis=1)
+
+    # Avoid division by zero
+    neigh_rates = nums / (denoms + 1e-12)
+
+    # -------------------------------------------------
+    # 2. Calculate Root Rates (Vectorized)
+    # -------------------------------------------------
+    # Assuming a simple rate function for root jumps here.
+    # You would use similar gathering logic if it depends on p.
+    root_rates = args["root_rates"]  # Placeholder
+
+    # -------------------------------------------------
+    # 3. Combine Rates and Update Matrix
+    # -------------------------------------------------
+    # We need to put rates back into the order of 'rows' and 'cols'
+    total_transitions = len(args["rows"])
+    all_rates = jnp.zeros(total_transitions)
+
+    # Scatter the calculated rates into the full rates array
+    all_rates = all_rates.at[args["neigh_idx_map"]].set(neigh_rates)
+    all_rates = all_rates.at[args["root_idx_map"]].set(root_rates)
+
+    # Create BCOO Matrix (O(1) inside JIT)
+    sparse_indices = jnp.stack([args["rows"], args["cols"]], axis=1)
+    Q_off = sparse.BCOO((all_rates, sparse_indices), shape=(args["num_states"], args["num_states"]))
+
+    # Diagonal Adjustment
+    row_sums = sparse.bcoo_reduce_sum(Q_off, axes=[1]).todense().reshape(-1)
+    Q_final = Q_off - sparse_diag(row_sums, args["num_states"])
+
+    return Q_final.T @ p
+
+
 def simulate_markov_lfe(
         ips: ParticleSystem,
         initial_conditions: dict[any, float],
@@ -253,102 +513,32 @@ def simulate_markov_lfe(
     index_to_ode_state_space = {i: state for i, state in enumerate(ode_state_space)}
     ode_state_space_to_index = {state: i for i, state in enumerate(ode_state_space)}
 
-    gamma = compute_gamma(ips, deg_supp)
-
     # identify non-zero transitions rates
     # TODO: further reduce allowable transitions
-    rows = []
-    cols = []
+    # rows = []
+    # cols = []
+    #
+    # for src, tgt in product(vertex_state_space, repeat=2):
+    #     if one_coordinate_apart(src, tgt):
+    #         if ips.vertex_type_space is None and ips.edge_type_space is None:
+    #             rows.append(ode_state_space_to_index[src])
+    #             cols.append(ode_state_space_to_index[tgt])
+    #         elif ips.vertex_type_space is not None and ips.edge_type_space is None:
+    #             for neighbors_types in vertex_type_space:
+    #                 if len(src) == len(neighbors_types):
+    #                     rows.append(ode_state_space_to_index[(src, neighbors_types)])
+    #                     cols.append(ode_state_space_to_index[(tgt, neighbors_types)])
+    #         elif ips.vertex_type_space is None and ips.edge_type_space is not None:
+    #             for neighbors_types in edge_type_space:
+    #                 if len(src) == len(neighbors_types) - 1:
+    #                     rows.append(ode_state_space_to_index[(src, neighbors_types)])
+    #                     cols.append(ode_state_space_to_index[(tgt, neighbors_types)])
 
-    for src, tgt in product(vertex_state_space, repeat=2):
-        if one_coordinate_apart(src, tgt):
-            if ips.vertex_type_space is None and ips.edge_type_space is None:
-                rows.append(ode_state_space_to_index[src])
-                cols.append(ode_state_space_to_index[tgt])
-            elif ips.vertex_type_space is not None and ips.edge_type_space is None:
-                for neighbors_types in vertex_type_space:
-                    if len(src) == len(neighbors_types):
-                        rows.append(ode_state_space_to_index[(src, neighbors_types)])
-                        cols.append(ode_state_space_to_index[(tgt, neighbors_types)])
-            elif ips.vertex_type_space is None and ips.edge_type_space is not None:
-                for neighbors_types in edge_type_space:
-                    if len(src) == len(neighbors_types) - 1:
-                        rows.append(ode_state_space_to_index[(src, neighbors_types)])
-                        cols.append(ode_state_space_to_index[(tgt, neighbors_types)])
-
-    sparse_indices = jnp.array([[rows[i], cols[i]] for i in range(len(rows))])
-
-    def mlfe_ode(t, p):
-        # convert p to dictionary from ode_state_space to probabilities
-        marginal_prob = {ode_state_space[i]: p[i] for i in range(len(ode_state_space))}
-
-        # extract src, tgt relationships in the expanded ode_state_space
-        ode_rate = []
-        for row_idx, col_idx in zip(rows, cols):
-            src = index_to_ode_state_space[row_idx]
-            tgt = index_to_ode_state_space[col_idx]
-
-            if ips.vertex_type_space is None and ips.edge_type_space is None:
-                # find the index of the changed coordinate
-                changed_index = next(i for i in range(len(src)) if src[i] != tgt[i])
-
-                # if the root jumped, return usual rate
-                if changed_index == 0:
-                    ode_rate.append(
-                        ips.rate(src[0], tgt[0], src[1:], meas=marginal_prob if ips.global_interaction else None))
-                # otherwise, take conditional rate
-                else:
-                    ode_rate.append(
-                        gamma(src[changed_index], tgt[changed_index], src[changed_index], src[0], marginal_prob))
-
-            elif ips.vertex_type_space is not None and ips.edge_type_space is None:
-                changed_index = next(i for i in range(len(src[0])) if src[0][i] != tgt[0][i])
-                if changed_index == 0:
-                    ode_rate.append(
-                        ips.rate(src[0][0],
-                                 tgt[0][0],
-                                 src[0][1:],
-                                 neighbors_vertex_type=src[1],
-                                 meas=marginal_prob if ips.global_interaction else None)
-                    )
-                else:
-                    ode_rate.append(
-                        gamma(src[0][changed_index],
-                              tgt[0][changed_index],
-                              src[0][changed_index],
-                              src[0][0],
-                              marginal_prob,
-                              root_type=src[1][changed_index],
-                              one_type=src[1][0]
-                              )
-                    )
-            elif ips.vertex_type_space is None and ips.edge_type_space is not None:
-                changed_index = next(i for i in range(len(src[0])) if src[0][i] != tgt[0][i])
-
-                if changed_index == 0:
-                    ode_rate.append(
-                        ips.rate(src[0][changed_index],
-                                 tgt[0][changed_index],
-                                 src[0][1:],
-                                 neighbors_edge_type=src[1],
-                                 meas=marginal_prob if ips.global_interaction else None)
-                    )
-                else:
-                    ode_rate.append(gamma(src[0][changed_index],
-                                          tgt[0][changed_index],
-                                          src[0][changed_index],
-                                          src[0][0],
-                                          marginal_prob,
-                                          root_one_type=src[1][changed_index - 1]))
-
-        sparse_Q_off_diag = sparse.BCOO((jnp.array(ode_rate), sparse_indices), shape=(len(ode_state_space), len(ode_state_space)))
-
-        row_sums = sparse.bcoo_reduce_sum(sparse_Q_off_diag, axes=[1]).todense().reshape(-1)
-        sparse_Q = sparse_Q_off_diag - sparse_diag(row_sums, len(ode_state_space))
-
-        # print time
-        print(f"t = {t}")
-        return sparse_Q.transpose() @ p
+    # build args for JIT-compiled rate matrix function
+    print('**** Building rate matrix structure ****')
+    static_args, _ = build_static_maps(ips, deg_supp, ode_state_space, vertex_state_space, ode_state_space_to_index,
+                                       gamma_logic_func_builder, vertex_type_space=vertex_type_space if ips.vertex_type_space is not None else None,
+                                        edge_type_space=edge_type_space if ips.edge_type_space is not None else None)
 
     # calculate initial conditions on ode_state_space given i.i.d. initial conditions on vertices
     if ips.vertex_type_space is None and ips.edge_type_space is None:
@@ -371,12 +561,33 @@ def simulate_markov_lfe(
             for (state, type) in ode_state_space
         ]
 
-    # solve the ode
-    t_span = (0, max_time)
-    t_eval = np.linspace(0, max_time, num_grid_points)
-    sol = solve_ivp(mlfe_ode, t_span, ode_init, t_eval=t_eval, method='RK23')
+    y0 = jnp.array(ode_init)
 
-    return t_eval, sol.y, index_to_ode_state_space
+    term = diffrax.ODETerm(mlfe_vector_field)
+    solver = diffrax.Dopri5()
+
+    # Define output times
+    saveat = diffrax.SaveAt(ts=jnp.linspace(0, max_time, num_grid_points))
+
+    # PID Controller is CRITICAL for stiff systems
+    step_controller = diffrax.PIDController(rtol=1e-5, atol=1e-6)
+
+    # 4. RUN
+    print('**** Running simulation ****')
+    sol = diffrax.diffeqsolve(
+        term,
+        solver,
+        t0=0.0,
+        t1=max_time,
+        dt0=0.01,  # Initial step size guess (scalar!)
+        y0=y0,
+        args=static_args,
+        stepsize_controller=step_controller,
+        saveat=saveat,
+        max_steps=100000  # Safety limit
+    )
+
+    return sol.ts, sol.ys.transpose(), index_to_ode_state_space
 
 
 def simulate_markov_lfe_mf(
