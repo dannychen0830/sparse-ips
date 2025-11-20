@@ -252,16 +252,18 @@ def simulate_markov_lfe(
                 cols.append(ode_state_space_to_index[tgt])
             elif ips.vertex_type_space is not None and ips.edge_type_space is None:
                 for neighbors_types in vertex_type_space:
-                    rows.append(ode_state_space_to_index[(src, neighbors_types)])
-                    cols.append(ode_state_space_to_index[(tgt, neighbors_types)])
+                    if len(src) == len(neighbors_types):
+                        rows.append(ode_state_space_to_index[(src, neighbors_types)])
+                        cols.append(ode_state_space_to_index[(tgt, neighbors_types)])
             elif ips.vertex_type_space is None and ips.edge_type_space is not None:
                 for neighbors_types in edge_type_space:
-                    rows.append(ode_state_space_to_index[(src, neighbors_types)])
-                    cols.append(ode_state_space_to_index[(tgt, neighbors_types)])
+                    if len(src) == len(neighbors_types) - 1:
+                        rows.append(ode_state_space_to_index[(src, neighbors_types)])
+                        cols.append(ode_state_space_to_index[(tgt, neighbors_types)])
 
     # store sparse matrix (initialize the first iteration)
     sparse_Q_off_diag = csr_matrix(([0] * len(rows), (rows, cols)),
-                                       shape=(len(ode_state_space), len(ode_state_space)))
+                                   shape=(len(ode_state_space), len(ode_state_space)))
 
     def mlfe_ode(t, p):
         # convert p to dictionary from ode_state_space to probabilities
@@ -273,10 +275,10 @@ def simulate_markov_lfe(
             src = index_to_ode_state_space[row_idx]
             tgt = index_to_ode_state_space[col_idx]
 
-            # find the index of the changed coordinate
-            changed_index = next(i for i in range(len(src)) if src[i] != tgt[i])
-
             if ips.vertex_type_space is None and ips.edge_type_space is None:
+                # find the index of the changed coordinate
+                changed_index = next(i for i in range(len(src)) if src[i] != tgt[i])
+
                 # if the root jumped, return usual rate
                 if changed_index == 0:
                     ode_rate.append(
@@ -287,41 +289,46 @@ def simulate_markov_lfe(
                         gamma(src[changed_index], tgt[changed_index], src[changed_index], src[0], marginal_prob))
 
             elif ips.vertex_type_space is not None and ips.edge_type_space is None:
-                for neighborhood_type in product(ips.vertex_type_space, repeat=len(src)):
-                    if changed_index == 0:
-                        ode_rate.append(
-                            ips.rate(src[0],
-                                     tgt[0],
-                                     src[1:],
-                                     neighbors_vertex_type=neighborhood_type,
-                                     meas=marginal_prob if ips.global_interaction else None)
-                        )
-                    else:
-                        ode_rate.append(gamma(src[changed_index],
-                                              tgt[changed_index],
-                                              src[changed_index],
-                                              src[0],
-                                              marginal_prob,
-                                              root_type=neighborhood_type[changed_index],
-                                              one_type=neighborhood_type[0]))
+                changed_index = next(i for i in range(len(src[0])) if src[0][i] != tgt[0][i])
+                if changed_index == 0:
+                    ode_rate.append(
+                        ips.rate(src[0][0],
+                                 tgt[0][0],
+                                 src[0][1:],
+                                 neighbors_vertex_type=src[1],
+                                 meas=marginal_prob if ips.global_interaction else None)
+                    )
+                else:
+                    ode_rate.append(
+                        gamma(src[0][changed_index],
+                              tgt[0][changed_index],
+                              src[0][changed_index],
+                              src[0][0],
+                              marginal_prob,
+                              root_type=src[1][changed_index],
+                              one_type=src[1][0]
+                              )
+                    )
             elif ips.vertex_type_space is None and ips.edge_type_space is not None:
-                for neighborhood_type in product(ips.edge_type_space, repeat=len(src) - 1):
-                    if changed_index == 0:
-                        ode_rate.append(ips.rate(src[0],
-                                                 tgt[0],
-                                                 src[1:],
-                                                 neighbors_edge_type=neighborhood_type,
-                                                 meas=marginal_prob if ips.global_interaction else None))
-                    else:
-                        ode_rate.append(gamma(src[changed_index],
-                                              tgt[changed_index],
-                                              src[changed_index],
-                                              src[0],
-                                              marginal_prob,
-                                              root_one_type=neighborhood_type[changed_index - 1]))
+                changed_index = next(i for i in range(len(src[0])) if src[0][i] != tgt[0][i])
 
-        sparse_Q_off_diag = csr_matrix((ode_rate, (rows, cols)),
-                                       shape=(len(ode_state_space), len(ode_state_space)))
+                if changed_index == 0:
+                    ode_rate.append(
+                        ips.rate(src[0][changed_index],
+                                 tgt[0][changed_index],
+                                 src[0][1:],
+                                 neighbors_edge_type=src[1],
+                                 meas=marginal_prob if ips.global_interaction else None)
+                    )
+                else:
+                    ode_rate.append(gamma(src[0][changed_index],
+                                          tgt[0][changed_index],
+                                          src[0][changed_index],
+                                          src[0][0],
+                                          marginal_prob,
+                                          root_one_type=src[1][changed_index - 1]))
+
+        sparse_Q_off_diag.data = np.array(ode_rate)
 
         row_sums = sparse_Q_off_diag.sum(axis=1).A.flatten()
         sparse_Q = sparse_Q_off_diag - diags(row_sums, format='csr')
