@@ -1,10 +1,7 @@
 import numpy as np
 from sparseips.ips_class import ParticleSystem, MeanFieldParticleSystem
 from sparseips.jump_ips_sim import simulate_mean_field_jump_process, get_particle_states_at_times
-from scipy.integrate import solve_ivp
-from scipy.sparse import csr_matrix, diags
 
-import jax.debug
 from jax.experimental import sparse
 import jax.numpy as jnp
 import diffrax
@@ -13,126 +10,6 @@ import optimistix as optx
 
 from itertools import product
 from collections import Counter
-from datetime import datetime
-
-
-# TODO: fix reduced mlfe
-# def jump_rate_for_red_mlfe(
-#         state_space: List[Any],
-#         state_to_index: Dict[Any, int],
-#         b: Dict[Tuple[Any, Any], float],
-#         rho: Dict[Tuple[Any, Any], float]
-# ) -> Callable:
-#     # define the rate function to be returned
-#     def rate(src_state, tgt_state, neighbors_state, **kwargs):
-#         # check if src_state is the zero state
-#         if state_to_index[src_state] == 0:
-#             return sum(b[(a, tgt_state)] * sum(1 for state in neighbors_state if state == a) for a in state_space)
-#         # if not, transition is independent of neighbor states
-#         else:
-#             return rho[(src_state, tgt_state)]
-#
-#     return rate
-#
-#
-# def simulate_reduced_markov_lfe(
-#         state_space: List[Any],
-#         state_to_index: Dict[Any, int],
-#         b: Dict[Tuple[Any, Any], float],
-#         rho: Dict[Tuple[Any, Any], float],
-#         deg_dist: List[float],
-#         phi: Callable[[float], float],
-#         max_time: float,
-#         initial_conditions: Dict[Any, float],
-#         num_grid_points: int = 100
-# ):
-#     # define simulation parameters
-#     num_states = len(state_space)
-#     deg_supp = [i for (i,p) in enumerate(deg_dist) if p > 0]
-#     deg_dist_no_zero = np.array([p for p in deg_dist if p > 0])
-#     initial_conditions_array = np.array([v for v in initial_conditions.values()])
-#
-#     # initial condition for f_0, f_a for a = {1, ..., m}
-#     f = initial_conditions_array
-#     # initial condition for F
-#     F = np.array([0.0])
-#     # initial condition for P_0,0;k = 1 for k such that theta(k) > 0
-#     # initial condition for P_0,a;k = 0 for a > 0 and k such that theta(k) > 0 is 0.0
-#     p0ak = np.zeros(shape=(num_states, len(deg_supp)))
-#     p0ak[0, :] = 1.0
-#     # initial condition for P_a,c
-#     pac = np.eye(num_states - 1)
-#
-#     ode_initial_conditions = np.concatenate((f, F, p0ak.flatten(), pac.flatten()))
-#
-#     # convert beta and rho from dictionary to numpy array
-#     b_mat = np.zeros(shape=(num_states, num_states))
-#     rho_mat = np.zeros(shape=(num_states, num_states))
-#     for i in state_space:
-#         for j in state_space:
-#             try:
-#                 b_mat[state_to_index[i], state_to_index[j]] = b[(i,j)]
-#             except KeyError:
-#                 b_mat[state_to_index[i], state_to_index[j]] = 0.0
-#             try:
-#                 rho_mat[state_to_index[i], state_to_index[j]] = rho[(i,j)]
-#             except KeyError:
-#                 rho_mat[state_to_index[i], state_to_index[j]] = 0.0
-#     # diagonal of rho is negative row sum
-#     for i in range(num_states):
-#         rho_mat[i,i] = -np.sum(rho_mat[i,:])
-#     b_vec = np.sum(b_mat, axis=1)
-#     b_mat_red = b_mat[1:, 1:]
-#     rho_mat_red = rho_mat[1:, 1:]
-#     k = np.array(deg_supp)
-#
-#     def red_mlfe_ode(t, y):
-#         f = y[:num_states]
-#         F = y[num_states:num_states + 1]
-#         p0ak = y[num_states + 1:num_states + 1 + len(deg_supp) * num_states]
-#         pac = y[num_states + 1 + len(deg_supp) * num_states:]
-#
-#         f = f.reshape((num_states,))
-#         F = F.reshape((1,))
-#         p0ak = p0ak.reshape((num_states, len(deg_supp)))
-#         pac = pac.reshape((num_states - 1, num_states - 1))
-#
-#         # compute the derivatives
-#         df0 = np.dot(b_vec, f) * f[0] * (1 - phi(F[0]))
-#         dfa = f[0] * phi(F) * b_mat_red.T @ f[1:] + rho_mat_red.T @ f[1:] + f[1:] * np.dot(b_vec, f) - f[1:] * b_vec[1:]
-#         dF = np.dot(b_vec, f)
-#
-#         dp0ak = np.zeros(shape=(num_states, len(deg_supp)))
-#         dp0ak[0,:] = -np.dot(b_vec, f) * k * p0ak[0,:]
-#         dp0ak[1:,:] = (p0ak[0,:] * k * b_mat_red.T @ f[1:] + (p0ak[1:,:].T @ rho_mat_red).squeeze()).reshape((num_states - 1, len(deg_supp)))
-#
-#         dpac = pac @ rho_mat_red
-#
-#         return np.concatenate((df0.reshape((1,)), dfa, dF.reshape((1,)), dp0ak.flatten(), dpac.flatten()))
-#
-#     # solve the ode
-#     t_span = (0, max_time)
-#     t_eval = np.linspace(0, max_time, num_grid_points)
-#     sol = solve_ivp(red_mlfe_ode, t_span, ode_initial_conditions, t_eval=t_eval, method='RK45')
-#
-#     # extract the solution
-#     def convert_to_prob(y):
-#         f = y[:num_states]
-#         F = y[num_states:num_states + 1]
-#         p0ak = y[num_states + 1:num_states + 1 + len(deg_supp) * num_states]
-#         pac = y[num_states + 1 + len(deg_supp) * num_states:]
-#
-#         f = f.reshape((num_states,))
-#         F = F.reshape((1,))
-#         p0ak = p0ak.reshape((num_states, len(deg_supp)))
-#         pac = pac.reshape((num_states - 1, num_states - 1))
-#
-#         return initial_conditions_array[0] * deg_dist_no_zero @ p0ak[1:,:].T + pac.T @ initial_conditions_array[1:]
-#
-#     # apply convert_to_prob to the solution
-#     prob_sol = np.array([convert_to_prob(y) for y in sol.y.T])
-#
-#     return t_eval, prob_sol, sol
 
 
 def one_coordinate_apart(tuple1: tuple, tuple2: tuple) -> bool:
@@ -143,70 +20,6 @@ def one_coordinate_apart(tuple1: tuple, tuple2: tuple) -> bool:
     :return: True if the tuples differ in exactly one coordinate, False otherwise
     """
     return len(tuple1) == len(tuple2) and sum(x != y for x, y in zip(tuple1, tuple2)) == 1
-
-
-def compute_gamma(ips, deg_supp):
-    if ips.vertex_type_space is None and ips.edge_type_space is None:
-        def gamma(src: tuple, tgt: tuple, root_state, one_state, marginal_prob: dict[tuple, float],
-                  **kwargs) -> float:
-            numerator = sum(
-                (1 + len(remaining_state)) *
-                marginal_prob[(root_state, one_state) + remaining_state] *
-                ips.rate(src, tgt, (one_state,) + remaining_state,
-                         meas=marginal_prob if ips.global_interaction else None)
-                for k in deg_supp for remaining_state in product(ips.state_space, repeat=k - 1)
-            )
-            denominator = sum(
-                (1 + len(remaining_state)) * marginal_prob[(root_state, one_state) + remaining_state]
-                for k in deg_supp for remaining_state in product(ips.state_space, repeat=k - 1)
-            )
-            return numerator / denominator if denominator > 0 else 0
-
-    elif ips.vertex_type_space is not None and ips.edge_type_space is None:
-        def gamma(src: tuple, tgt: tuple, root_state, one_state, marginal_prob: dict[tuple, float], root_type,
-                  one_type) -> float:
-            numerator = sum(
-                (2 + len(remaining_state)) *
-                marginal_prob[((root_state, one_state) + remaining_state, (root_type, one_type) + remaining_type)]
-                * ips.rate(src, tgt, (one_state,) + remaining_state,
-                           neighbors_vertex_type=(root_type, one_type) + remaining_type,
-                           meas=marginal_prob if ips.global_interaction else None)
-                for k in deg_supp
-                for remaining_state in product(ips.state_space, repeat=k - 1)
-                for remaining_type in product(ips.vertex_type_space, repeat=k - 1)
-            )
-            denominator = sum(
-                (2 + len(remaining_state)) * marginal_prob[
-                    ((root_state, one_state) + remaining_state, (root_type, one_type) + remaining_type)]
-                for k in deg_supp
-                for remaining_state in product(ips.state_space, repeat=k - 1)
-                for remaining_type in product(ips.vertex_type_space, repeat=k - 1)
-            )
-            return numerator / denominator if denominator > 0 else 0
-
-    elif ips.vertex_type_space is None and ips.edge_type_space is not None:
-        def gamma(src: tuple, tgt: tuple, root_state, one_state, marginal_prob: dict[tuple, float],
-                  root_one_type) -> float:
-            numerator = sum(
-                (1 + len(remaining_state)) *
-                marginal_prob[((root_state, one_state) + remaining_state, (root_one_type,) + remaining_type)]
-                * ips.rate(src, tgt, (one_state,) + remaining_state,
-                           neighbors_edge_type=(root_one_type,) + remaining_type,
-                           meas=marginal_prob if ips.global_interaction else None)
-                for k in deg_supp
-                for remaining_state in product(ips.state_space, repeat=k - 1)
-                for remaining_type in product(ips.edge_type_space, repeat=k - 1)
-            )
-            denominator = sum(
-                (1 + len(remaining_state)) * marginal_prob[
-                    ((root_state, one_state) + remaining_state, (root_one_type,) + remaining_type)]
-                for k in deg_supp
-                for remaining_state in product(ips.state_space, repeat=k - 1)
-                for remaining_type in product(ips.edge_type_space, repeat=k - 1)
-            )
-            return numerator / denominator if denominator > 0 else 0
-
-    return gamma
 
 
 def sparse_diag(data: jnp.ndarray, size: int) -> sparse.BCOO:
@@ -302,7 +115,7 @@ def build_static_maps(ips, ode_state_space, vertex_state_space, ode_state_to_ind
 
                     # compute tuples (weight, rate, state) needed for gamma calculation
                     changed_index = next(i for i in range(len(src)) if src[i] != tgt[i])
-                    needed_terms = gamma_logic_func(ips, src[changed_index], tgt[changed_index], src[0], tgt[0])
+                    needed_terms = gamma_logic_func(ips, src[changed_index], tgt[changed_index], src[changed_index], src[0])
 
                     term_indices = [ode_state_to_index[s] for w, r, s in needed_terms]
                     term_rates = [r for w, r, s in needed_terms]
@@ -327,12 +140,12 @@ def build_static_maps(ips, ode_state_space, vertex_state_space, ode_state_to_ind
                                                        neighbors_vertex_type=neighbor_types))
                         # leaf jump
                         else:
-                            # NEIGHBOR JUMP (Uses Gamma)
                             neighbor_jump_indices.append(transition_idx)
 
                             # compute tuples (weight, rate, state) needed for gamma calculation
                             changed_index = next(i for i in range(len(src)) if src[i] != tgt[i])
-                            needed_terms = gamma_logic_func(ips, src[changed_index], tgt[changed_index], src[0], tgt[0],
+                            needed_terms = gamma_logic_func(ips, src[changed_index], tgt[changed_index],
+                                                            src[changed_index], src[0],
                                                             root_type=neighbor_types[changed_index],
                                                             one_type=neighbor_types[0])
 
@@ -364,8 +177,9 @@ def build_static_maps(ips, ode_state_space, vertex_state_space, ode_state_to_ind
 
                             # compute tuples (weight, rate, state) needed for gamma calculation
                             changed_index = next(i for i in range(len(src)) if src[i] != tgt[i])
-                            needed_terms = gamma_logic_func(ips, src[changed_index], tgt[changed_index], src[0], tgt[0],
-                                                            root_one_type=neighbor_types[changed_index - 1])
+                            needed_terms = gamma_logic_func(ips, src[changed_index], tgt[changed_index],
+                                                            src[changed_index], src[0],
+                                                            root_one_type=neighbor_types[0])
 
                             term_indices = [ode_state_to_index[s] for w, r, s in needed_terms]
                             term_rates = [r for w, r, s in needed_terms]
@@ -410,16 +224,10 @@ def build_static_maps(ips, ode_state_space, vertex_state_space, ode_state_to_ind
     return static_args, sparse_indices
 
 
-def print_progress(t):
-    """Standard Python function to execute the print action."""
-    print(f"**** Time: {t}")
-
-
 def mlfe_vector_field(t, p, args):
     """
     Calculates dp/dt entirely using vector operations.
     """
-    jax.debug.callback(print_progress, t)
 
     # Unpack static args
     gamma_indices = args["gamma_indices"]  # Shape: (Num_Neigh_Jumps, Max_Terms)
@@ -507,8 +315,7 @@ def simulate_markov_lfe(
     elif ips.vertex_type_space is None and ips.edge_type_space is not None:
         vertex_state_space = [(root,) + children for k in deg_supp for (root, children) in
                               product(ips.state_space, product(ips.state_space, repeat=k))]
-        edge_type_space = [children for k in deg_supp for (root, children) in
-                           product(ips.edge_type_space, product(ips.edge_type_space, repeat=k))]
+        edge_type_space = [root_children for k in deg_supp for root_children in product(ips.edge_type_space, repeat=k)]
         ode_state_space = [(state, type) for state in vertex_state_space for type in edge_type_space if
                            len(state) == len(type) + 1]
 
@@ -539,7 +346,7 @@ def simulate_markov_lfe(
             initial_conditions[state[0]]
             * deg_dist[len(state) - 1]
             * np.prod([initial_conditions[child] for child in state[1:]])
-            * np.prod([edge_type_init[t] for t in type]) / 2
+            * np.prod([edge_type_init[t] for t in type])
             for (state, type) in ode_state_space
         ]
 
@@ -570,8 +377,8 @@ def simulate_markov_lfe(
     saveat = diffrax.SaveAt(ts=jnp.linspace(0, max_time, num_grid_points))
 
     # PID Controller is CRITICAL for stiff systems
-    if step_control == 'adative':
-        step_controller = diffrax.PDController(rtol=1e-3, atol=1e-3)
+    if step_control == 'adaptive':
+        step_controller = diffrax.PIDController(rtol=1e-3, atol=1e-3)
     elif step_control == 'constant':
         step_controller = diffrax.ConstantStepSize()
     else:
@@ -589,7 +396,8 @@ def simulate_markov_lfe(
         args=static_args,
         stepsize_controller=step_controller,
         saveat=saveat,
-        max_steps=100000  # Safety limit
+        max_steps=100000,  # Safety limit
+        progress_meter=diffrax.TqdmProgressMeter()
     )
 
     return sol.ts, sol.ys.transpose(), index_to_ode_state_space
