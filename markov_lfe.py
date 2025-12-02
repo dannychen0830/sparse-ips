@@ -86,108 +86,62 @@ def build_static_maps(ips, ode_state_space, vertex_state_space, ode_state_to_ind
     gamma_weights = []
     gamma_rates = []
 
-    # Data for Root Calculation
-    root_rate_params = []  # Store static args for ips.rate if needed
 
-    # 1. Iterate ALL transitions (Python Loop - Runs ONCE)
+
     transition_idx = -1
     for src, tgt in product(vertex_state_space, repeat=2):
-        is_valid_transition = one_coordinate_apart(src, tgt)
 
-        if is_valid_transition:
-            # TODO: a lot of duplicate code here... bad!!!
-            # determine jump type
-            if ips.vertex_type_space is None and ips.edge_type_space is None:
-                transition_idx += 1
-                row_idx = ode_state_to_index[src]
-                col_idx = ode_state_to_index[tgt]
-                rows.append(row_idx)
-                cols.append(col_idx)
-
-                # root jump
-                if src[0] != tgt[0]:
-                    root_jump_indices.append(transition_idx)
-                    root_rates.append(ips.rate(src[0], tgt[0], src[1:]))
-                # leaf jump
-                else:
-                    # NEIGHBOR JUMP (Uses Gamma)
-                    neighbor_jump_indices.append(transition_idx)
-
-                    # compute tuples (weight, rate, state) needed for gamma calculation
-                    changed_index = next(i for i in range(len(src)) if src[i] != tgt[i])
-                    needed_terms = gamma_logic_func(ips, src[changed_index], tgt[changed_index], src[changed_index], src[0])
-
-                    term_indices = [ode_state_to_index[s] for w, r, s in needed_terms]
-                    term_rates = [r for w, r, s in needed_terms]
-                    term_weights = [w for w, r, s in needed_terms]
-
-                    gamma_dependency_indices.append(term_indices)
-                    gamma_weights.append(term_weights)
-                    gamma_rates.append(term_rates)
-            elif ips.vertex_type_space is not None or ips.edge_type_space is None:
-                for neighbor_types in vertex_type_space:
-                    if len(neighbor_types) == len(src):
-
-                        transition_idx += 1
-                        row_idx = ode_state_to_index[(src, neighbor_types)]
-                        col_idx = ode_state_to_index[(tgt, neighbor_types)]
-                        rows.append(row_idx)
-                        cols.append(col_idx)
-
-                        if src[0] != tgt[0]:
-                            root_jump_indices.append(transition_idx)
-                            root_rates.append(ips.rate(src[0], tgt[0], src[1:],
-                                                       neighbors_vertex_type=neighbor_types))
-                        # leaf jump
-                        else:
-                            neighbor_jump_indices.append(transition_idx)
-
-                            # compute tuples (weight, rate, state) needed for gamma calculation
-                            changed_index = next(i for i in range(len(src)) if src[i] != tgt[i])
-                            needed_terms = gamma_logic_func(ips, src[changed_index], tgt[changed_index],
-                                                            src[changed_index], src[0],
-                                                            root_type=neighbor_types[changed_index],
-                                                            one_type=neighbor_types[0])
-
-                            term_indices = [ode_state_to_index[s] for w, r, s in needed_terms]
-                            term_rates = [r for w, r, s in needed_terms]
-                            term_weights = [w for w, r, s in needed_terms]
-
-                            gamma_dependency_indices.append(term_indices)
-                            gamma_weights.append(term_weights)
-                            gamma_rates.append(term_rates)
-
+        if one_coordinate_apart(src, tgt):
+            type_space = ['empty']
+            if ips.vertex_type_space is not None and ips.edge_type_space is None:
+                type_space = vertex_type_space
             elif ips.vertex_type_space is None and ips.edge_type_space is not None:
-                for neighbor_types in edge_type_space:
-                    if len(neighbor_types) == len(src) - 1:
+                type_space = edge_type_space
 
-                        transition_idx += 1
+            for neighbor_types in type_space:
+                if (neighbor_types =='empty' and ips.vertex_type_space is None and ips.edge_type_space is None) or \
+                        (ips.vertex_type_space is not None and ips.edge_type_space is None and len(neighbor_types) == len(src)) or \
+                        (ips.vertex_type_space is None and ips.edge_type_space is not None and len(neighbor_types) == len(src) - 1):
+
+                    if neighbor_types == 'empty':
+                        neighbor_types = ()
+
+                    transition_idx += 1
+
+                    if ips.vertex_type_space is None and ips.edge_type_space is None:
+                        row_idx = ode_state_to_index[src]
+                        col_idx = ode_state_to_index[tgt]
+                    else:
                         row_idx = ode_state_to_index[(src, neighbor_types)]
                         col_idx = ode_state_to_index[(tgt, neighbor_types)]
-                        rows.append(row_idx)
-                        cols.append(col_idx)
 
-                        if src[0] != tgt[0]:
-                            root_jump_indices.append(transition_idx)
-                            root_rates.append(ips.rate(src[0], tgt[0], src[1:], neighbors_edge_type=neighbor_types))
-                        # leaf jump
-                        else:
-                            # NEIGHBOR JUMP (Uses Gamma)
-                            neighbor_jump_indices.append(transition_idx)
+                    rows.append(row_idx)
+                    cols.append(col_idx)
 
-                            # compute tuples (weight, rate, state) needed for gamma calculation
-                            changed_index = next(i for i in range(len(src)) if src[i] != tgt[i])
-                            needed_terms = gamma_logic_func(ips, src[changed_index], tgt[changed_index],
-                                                            src[changed_index], src[0],
-                                                            root_one_type=neighbor_types[0])
+                    if src[0] != tgt[0]:
+                        root_jump_indices.append(transition_idx)
+                        root_rates.append(ips.rate(src[0], tgt[0], src[1:],
+                                                   neighbors_vertex_type=neighbor_types if ips.vertex_type_space is not None else None,
+                                                   neighbors_edge_type=neighbor_types if ips.edge_type_space is not None else None))
+                    # leaf jump
+                    else:
+                        neighbor_jump_indices.append(transition_idx)
 
-                            term_indices = [ode_state_to_index[s] for w, r, s in needed_terms]
-                            term_rates = [r for w, r, s in needed_terms]
-                            term_weights = [w for w, r, s in needed_terms]
+                        # compute tuples (weight, rate, state) needed for gamma calculation
+                        changed_index = next(i for i in range(len(src)) if src[i] != tgt[i])
+                        needed_terms = gamma_logic_func(ips, src[changed_index], tgt[changed_index],
+                                                        src[changed_index], src[0],
+                                                        root_type=neighbor_types[changed_index] if ips.vertex_type_space is not None else None,
+                                                        one_type=neighbor_types[0] if ips.vertex_type_space is not None else None,
+                                                        root_one_type=neighbor_types[0] if ips.edge_type_space is not None else None)
 
-                            gamma_dependency_indices.append(term_indices)
-                            gamma_weights.append(term_weights)
-                            gamma_rates.append(term_rates)
+                        term_indices = [ode_state_to_index[s] for w, r, s in needed_terms]
+                        term_rates = [r for w, r, s in needed_terms]
+                        term_weights = [w for w, r, s in needed_terms]
+
+                        gamma_dependency_indices.append(term_indices)
+                        gamma_weights.append(term_weights)
+                        gamma_rates.append(term_rates)
 
     # Find max number of terms in any gamma sum
     max_terms = max(len(x) for x in gamma_dependency_indices) if gamma_dependency_indices else 0
