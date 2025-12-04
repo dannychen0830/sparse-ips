@@ -7,18 +7,18 @@ from collections import Counter
 
 class ParticleSystem:
     def __init__(
-        self,
-        state_space: list[any],
-        graph: nx.Graph,
-        name: str = None,
-        deg_dist: dict[int, float] = None,
-        vertex_type_space: list[any] = None,
-        vertex_type: dict[int, any] = None,
-        edge_type_space: list[any] = None,
-        edge_type: dict[tuple[int, int], any] = None,
-        edge_state: list[any] = None,
-        edge_rate: callable = None,
-        global_interaction: bool = False,
+            self,
+            state_space: list[any],
+            graph: nx.Graph,
+            name: str = None,
+            deg_dist: dict[int, float] = None,
+            vertex_type_space: list[any] = None,
+            vertex_type: dict[int, any] = None,
+            edge_type_space: list[any] = None,
+            edge_type: dict[tuple[int, int], any] = None,
+            edge_state: list[any] = None,
+            edge_rate: callable = None,
+            global_interaction: bool = False,
     ):
 
         self.name = name
@@ -45,21 +45,32 @@ class ParticleSystem:
         self.edge_rate = edge_rate
         self.global_interaction = global_interaction
 
+        self.params = None
+
     @abstractmethod
-    def rate(
-        self,
-        src: any,
-        tgt: any,
-        neighbors: tuple[any],
-        neighbors_vertex_type: list[any] = None,
-        neighbors_edge_type: list[any] = None,
-        meas: dict[tuple[any], float] = None,
-    ) -> float:
+    def rate(self,
+             src: any,
+             tgt: any,
+             neighbors: tuple[any],
+             neighbors_vertex_type: list[any] = None,
+             neighbors_edge_type: list[any] = None,
+             meas: dict[tuple[any], float] = None,
+             ) -> float:
         """
         Compute the rate of transition from source_state to target_state for a given node.
         This method should be implemented by subclasses.
         """
         raise NotImplementedError("Subclasses should implement this method.")
+
+    def rate_vectorized(self,
+                        src,
+                        tgt,
+                        neighbors,
+                        params=None,
+                        vertex_types=None,
+                        edge_types=None,
+                        meas=None):
+        pass
 
     def get_empirical_degree_distribution(self):
         if self.deg_dist is not None:
@@ -97,12 +108,12 @@ class ParticleSystem:
         return new_graph
 
     def renew_graph(
-        self,
-        seed: int,
-        vertex_type_func: callable = None,
-        edge_type_func: callable = None,
-        edge_state_func: callable = None,
-        edge_rate_func: callable = None,
+            self,
+            seed: int,
+            vertex_type_func: callable = None,
+            edge_type_func: callable = None,
+            edge_state_func: callable = None,
+            edge_rate_func: callable = None,
     ):
         # sample a new graph according to deg distribution
 
@@ -125,11 +136,11 @@ class ParticleSystem:
         return self
 
     def sim_rate(
-        self,
-        node: int,
-        source_state: any,
-        target_state: any,
-        current_config: dict[int, any],
+            self,
+            node: int,
+            source_state: any,
+            target_state: any,
+            current_config: dict[int, any],
     ):
         # get neighbors of the source state
         neighbors_state = tuple(
@@ -140,7 +151,7 @@ class ParticleSystem:
             None
             if self.vertex_type is None
             else [self.vertex_type[node]]
-            + [self.vertex_type[neighbor] for neighbor in self.graph.neighbors(node)]
+                 + [self.vertex_type[neighbor] for neighbor in self.graph.neighbors(node)]
         )
         # get neighbors edge type
         neighbors_edge_type = (
@@ -187,10 +198,10 @@ class ParticleSystem:
 
 class MeanFieldParticleSystem:
     def __init__(
-        self,
-        state_space: list[any],
-        num_particles: int,
-        name: str = None,
+            self,
+            state_space: list[any],
+            num_particles: int,
+            name: str = None,
     ):
         self.state_space = state_space
         self.num_particles = num_particles
@@ -201,7 +212,7 @@ class MeanFieldParticleSystem:
         raise NotImplementedError("Subclasses should implement this method.")
 
     def compute_empirical_measure(
-        self, current_state: dict[int, any]
+            self, current_state: dict[int, any]
     ) -> dict[any, float]:
         """
         Compute the empirical measure (fraction of particles in each state).
