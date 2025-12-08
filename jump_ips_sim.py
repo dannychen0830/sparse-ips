@@ -1,21 +1,21 @@
 import numpy as np
-from sparseips.ips_class import ParticleSystem, MeanFieldParticleSystem
-from typing import List, Tuple, Dict, Callable, Any
+from sparseips.ips_class import *
+from joblib import Parallel, delayed # use this to parallelize also in jupyter notebooks
 
 
 def simulate_jump_process(
     ips: ParticleSystem,
-    initial_conditions: Dict[int, Any],
+    initial_conditions: dict[int,any],
     max_time: float,
     seed: int = None,
     verbose: bool = False,
-) -> List[Tuple[int, float, Tuple[Any, Any]]]:
+) -> list[tuple[int, float, tuple[any, any]]]:
     """
     Simulate interacting particles on a graph as a continuous-time Markov chain.
 
     Parameters:
     -----------
-    state_space : List[Any]
+    state_space : list[Any]
         List of possible states a particle can take
     graph : nx.Graph
         Graph that specifies the interaction structure
@@ -24,7 +24,7 @@ def simulate_jump_process(
         - If it has 3 parameters: only neighbor states
         - If it has 4 parameters: neighbor states and global state
         The signature is automatically detected
-    initial_conditions : Dict[int, Any]
+    initial_conditions : dict[int,any
         Dictionary mapping node indices to their initial states
     max_time : float
         Maximum simulation time
@@ -33,7 +33,7 @@ def simulate_jump_process(
 
     Returns:
     --------
-    List[Tuple[int, float, Tuple[Any, Any]]]
+    list[tuple[int, float, tuple[any, any]]
         List of tuples (vertex that jumped, jump time, transition that occurred)
         where transition is a tuple (source_state, target_state)
     """
@@ -80,7 +80,7 @@ def simulate_jump_process(
             break
 
         # Calculate total rate
-        total_rate = sum(rates)
+        total_rate = np.sum(rates)
 
         # Sample time to next event (exponential distribution)
         if total_rate > 0:
@@ -97,7 +97,7 @@ def simulate_jump_process(
 
         # Sample which transition occurs
         transition_index = np.random.choice(
-            len(possible_transitions), p=np.array(rates) / total_rate
+            len(possible_transitions), p=np.array(rates) / np.sum(rates)
         )
         node, source_state, target_state = possible_transitions[transition_index]
 
@@ -113,26 +113,63 @@ def simulate_jump_process(
     return jumps
 
 
+def simulate_sir_mc_parallel(ips, initial_conditions, num_sims=15, max_time=5, seed=10, n_jobs=-1):
+    """
+    Parallelized version using joblib (works better in notebooks).
+    n_jobs=-1 uses all CPUs.
+    """
+    index_to_state = ips.get_state_to_index_map()
+    index_to_state = {v: k for k, v in index_to_state.items()}
+
+    def single_sim(t):
+        sim_init_cond = {
+            i: index_to_state[np.random.choice(len(ips.state_space),
+                                                   p=[p for p in initial_conditions.values()])]
+            for i in range(ips.num_particles)
+        }
+
+        jumps = simulate_jump_process(
+            ips=ips,
+            initial_conditions=sim_init_cond,
+            max_time=max_time,
+            seed=seed + t,
+            verbose=False
+        )
+
+        return sim_init_cond, jumps
+
+    # Run in parallel
+    results = Parallel(n_jobs=n_jobs, backend='loky')(
+        delayed(single_sim)(t) for t in range(num_sims)
+    )
+
+    # Unpack results
+    sim_init_cond_list = [result[0] for result in results]
+    jumps_list = [result[1] for result in results]
+
+    return sim_init_cond_list, jumps_list
+
+
 def get_particle_states_at_times(
-    jumps: List[Tuple[int, float, Tuple[Any, Any]]],
-    initial_conditions: Dict[int, Any],
-    timestamps: List[float],
-) -> List[Dict[int, Any]]:
+    jumps: list[tuple[int, float, tuple[any, any]]],
+    initial_conditions: dict[int,any],
+    timestamps: list[float],
+) -> list[dict[int,any]]:
     """
     Get the state of each particle at multiple specific time points efficiently.
 
     Parameters:
     -----------
-    jumps : List[Tuple[int, float, Tuple[Any, Any]]]
+    jumps : list[tuple[int, float, tuple[any, any]]
         Output from simulate_jump_process function
-    initial_conditions : Dict[int, Any]
+    initial_conditions : dict[int,any
         Dictionary mapping particle indices to their initial states
-    timestamps : List[float]
+    timestamps : list[float]
         List of time points to query
 
     Returns:
     --------
-    List[Dict[int, Any]]
+    list[dict[int,any]
         List of dictionaries mapping particle indices to their states at each time point,
         in the same order as the input timestamps
     """
@@ -176,14 +213,14 @@ def get_particle_states_at_times(
 
 def simulate_mean_field_jump_process(
     mfps: MeanFieldParticleSystem,
-    initial_conditions: Dict[int, Any],
+    initial_conditions: dict[int,any],
     max_time: float,
     seed: int = None,
     verbose: bool = False,
     tau_leap: bool = False,
     tau: float = 0.01,
     epsilon: float = 0.03,
-) -> List[Tuple[int, float, Tuple[Any, Any]]]:
+) -> list[tuple[int, float, tuple[any, any]]]:
     """
     Simulate a mean-field particle system as a continuous-time Markov chain.
 
@@ -191,7 +228,7 @@ def simulate_mean_field_jump_process(
     -----------
     mfps : MeanFieldParticleSystem
         The mean-field particle system to simulate
-    initial_conditions : Dict[int, Any]
+    initial_conditions : dict[int,any
         Dictionary mapping particle indices to their initial states
     max_time : float
         Maximum simulation time
@@ -208,7 +245,7 @@ def simulate_mean_field_jump_process(
 
     Returns:
     --------
-    List[Tuple[int, float, Tuple[Any, Any]]]
+    list[tuple[int, float, tuple[any, any]]
         List of tuples (particle_id, jump_time, transition)
         where transition is a tuple (source_state, target_state)
     """
@@ -224,11 +261,11 @@ def simulate_mean_field_jump_process(
 
 def simulate_mean_field_exact(
     mfps: MeanFieldParticleSystem,
-    initial_conditions: Dict[int, Any],
+    initial_conditions: dict[int,any],
     max_time: float,
     seed: int = None,
     verbose: bool = False,
-) -> List[Tuple[int, float, Tuple[Any, Any]]]:
+) -> list[tuple[int, float, tuple[any, any]]]:
     """Exact simulation (original algorithm)."""
     if seed is not None:
         np.random.seed(seed)
@@ -351,13 +388,13 @@ def simulate_mean_field_exact(
 
 def simulate_mean_field_tau_leap(
     mfps: MeanFieldParticleSystem,
-    initial_conditions: Dict[int, Any],
+    initial_conditions: dict[int,any],
     max_time: float,
     seed: int = None,
     verbose: bool = False,
     tau: float = 0.01,
     epsilon: float = 0.03,
-) -> List[Tuple[int, float, Tuple[Any, Any]]]:
+) -> list[tuple[int, float, tuple[any, any]]]:
     """
     Simulate using tau-leaping for faster approximate simulation.
 

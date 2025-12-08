@@ -191,7 +191,7 @@ class ParticleSystem:
     def get_state_to_index_map(self):
         """
         Get a mapping from state to index for the state space.
-        :return: A dictionary mapping each state to its index.
+        :return: A dictionary mapping each state to its  index.
         """
         return {state: i for i, state in enumerate(self.state_space)}
 

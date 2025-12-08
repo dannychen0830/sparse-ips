@@ -26,7 +26,9 @@ def plot_ensemble_state_probabilities(
         num_samples: int = 100,
         ax=None,
         colors=None,
-        labels=None,
+        xlabel='time',
+        ylabel='',
+        labels: list[str] = None,
         title: str = None,
         figsize=None,
 ) -> Tuple[plt.Figure, plt.Axes]:
@@ -131,8 +133,8 @@ def plot_ensemble_state_probabilities(
         )
 
     # Add legend, labels, and title
-    ax.set_xlabel("time")
-    ax.set_ylabel(None)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
     ax.set_title(f"Average state-occupancy for {ips.name}" if title is None else title)
     ax.legend()
     ax.grid(True, alpha=0.3)
