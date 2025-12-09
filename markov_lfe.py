@@ -183,7 +183,7 @@ def simulate_markov_lfe(
         num_grid_points: int = 100,
         solver_type: str = 'explicit',
         step_control: str = 'constant',
-        vectorized: bool = False,
+        vectorized: bool = None,
         verbose: bool=True
 ) -> tuple[np.ndarray, np.ndarray, dict[int, tuple[any]]]:
 
@@ -215,6 +215,9 @@ def simulate_markov_lfe(
     # index state dependence
     if verbose:
         print('**** Building rate matrix structure ****')
+
+    if vectorized is None:
+        vectorized = hasattr(ips, 'rate_vectorized')
     if vectorized:
         # Validate that user provided vectorized rate function
         if not hasattr(ips, 'rate_vectorized'):
@@ -304,7 +307,8 @@ def simulate_markov_lfe(
     else:
         raise ValueError(f'Unknown step control type: {step_control}')
 
-    print('**** Running simulation ****')
+    if verbose:
+        print('**** Running simulation ****')
     gc.collect()
     sol = diffrax.diffeqsolve(
         term,
@@ -317,7 +321,7 @@ def simulate_markov_lfe(
         stepsize_controller=step_controller,
         saveat=saveat,
         max_steps=100000,
-        progress_meter=diffrax.TqdmProgressMeter()
+        progress_meter=diffrax.TqdmProgressMeter() if verbose else diffrax.NoProgressMeter()
     )
 
     return sol.ts, sol.ys.transpose(), index_to_ode_state_space
