@@ -2,6 +2,7 @@ from itertools import product
 import numpy as np
 import jax.numpy as jnp
 import jax
+from functools import partial
 
 ### This file contains all JAX-specific functions for simulating Markov LFE
 
@@ -9,6 +10,39 @@ import jax
 ###########################
 # JIT-related helpers
 ###########################
+def compute_jax_static_args(ips):
+    deg_supp = ips.deg_supp
+
+    if ips.vertex_type_space is None and ips.edge_type_space is None:
+        vertex_state_space = [(root,) + children for k in deg_supp for (root, children) in
+                              product(ips.state_space, product(ips.state_space, repeat=k))]
+        ode_state_space = vertex_state_space
+    elif ips.vertex_type_space is not None and ips.edge_type_space is None:
+        vertex_state_space = [(root,) + children for k in deg_supp for (root, children) in
+                              product(ips.state_space, product(ips.state_space, repeat=k))]
+        vertex_type_space = [(root,) + children for k in deg_supp for (root, children) in
+                             product(ips.vertex_type_space, product(ips.vertex_type_space, repeat=k))]
+        ode_state_space = [(state, type) for state in vertex_state_space for type in vertex_type_space if
+                           len(state) == len(type)]
+    elif ips.vertex_type_space is None and ips.edge_type_space is not None:
+        vertex_state_space = [(root,) + children for k in deg_supp for (root, children) in
+                              product(ips.state_space, product(ips.state_space, repeat=k))]
+        edge_type_space = [root_children for k in deg_supp for root_children in product(ips.edge_type_space, repeat=k)]
+        ode_state_space = [(state, type) for state in vertex_state_space for type in edge_type_space if
+                           len(state) == len(type) + 1]
+
+    ode_state_space_to_index = {state: i for i, state in enumerate(ode_state_space)}
+
+    static_args, sparse_indices = jax_build_static_maps_vmap(
+        ips, ode_state_space, vertex_state_space, ips.get_state_to_index_map(), ode_state_space_to_index,
+        jax_gamma_index_builder_vmap,
+        vertex_type_space=vertex_type_space if ips.vertex_type_space is not None else None,
+        edge_type_space=edge_type_space if ips.edge_type_space is not None else None
+    )
+
+    return ode_state_space_to_index, static_args, sparse_indices
+
+
 def make_rate_caller(rate_func_vectorized, params, has_vertex_types, has_edge_types):
     """
     Creates a wrapper around the user's rate function that handles:
@@ -58,6 +92,64 @@ def make_rate_caller(rate_func_vectorized, params, has_vertex_types, has_edge_ty
         else:
             rates = jax.vmap(
                 lambda s, t, n, p: rate_func_vectorized(s, t, n, params=params, meas=p),
+                in_axes=(0, 0, 0, None)
+            )(src, tgt, masked_neighbors, meas)
+
+        return rates
+
+    return call_rates
+
+
+def make_rate_caller_(rate_func_vectorized, params, has_vertex_types, has_edge_types):
+    """
+    Creates a wrapper around the user's rate function that handles:
+    - Parameter passing
+    - Masking padded values
+    - Type handling
+    """
+    def call_rates(src, tgt, neighbors, vertex_types, edge_types, meas):
+        """
+        Vectorized rate computation.
+
+        Args:
+            src: (N,) array of source states
+            tgt: (N,) array of target states
+            neighbors: (N, max_neighbors) array of neighbor states (padded with -1) TODO: update max_neighbors + 1
+            vertex_types: (N, max_neighbors) array of vertex types (padded with -1)
+            edge_types: (N, max_neighbors) array of edge types (padded with -1)
+            has_vertex_types: bool
+            has_edge_types: bool
+
+        Returns:
+            (N,) array of rates
+        """
+        # Mask out padded neighbors (-1 values)
+        # This ensures padded values don't affect sums/counts
+        valid_mask = neighbors >= 0
+        masked_neighbors = jnp.where(valid_mask, neighbors, 0)
+
+        # Call user's rate function
+        if has_vertex_types:
+            masked_vertex_types = jnp.where(valid_mask, vertex_types, 0)
+            rates = jax.vmap(
+                lambda s, t, n, vt, p: rate_func_vectorized(
+                    s, t, n, vertex_types=vt, meas=p
+                ),
+                in_axes=(0, 0, 0, 0, None)
+            )(src, tgt, masked_neighbors, masked_vertex_types, meas)
+        elif has_edge_types:
+            masked_edge_types = jnp.where(valid_mask, edge_types, 0)
+            rates = jax.vmap(
+                lambda s, t, n, et, p: rate_func_vectorized(
+                    s, t, n, edge_types=et, meas=p
+                ),
+                in_axes=(0, 0, 0, 0, None)
+            )(src, tgt, masked_neighbors, masked_edge_types, meas)
+        else:
+            rates = jax.vmap(
+                lambda s, t, n, p: rate_func_vectorized(
+                    s, t, n, meas=p
+                ),
                 in_axes=(0, 0, 0, None)
             )(src, tgt, masked_neighbors, meas)
 

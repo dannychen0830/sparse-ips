@@ -108,7 +108,7 @@ def jax_mlfe_vector_field_vmap(t, p, args):
         args["neighbors"],
         args["neighbors_vertex_types"],
         args["neighbors_edge_types"],
-        p
+        p,
     )
 
     # -------------------------------------------------
@@ -184,12 +184,14 @@ def simulate_markov_lfe(
         solver_type: str = 'explicit',
         step_control: str = 'constant',
         vectorized: bool = None,
-        verbose: bool=True
+        verbose: bool = True,
+        static_args: dict[str, jnp.ndarray] = None,
+        sparse_indices: jnp.ndarray = None,
+        rate_caller: callable = None
 ) -> tuple[np.ndarray, np.ndarray, dict[int, tuple[any]]]:
-
     # step up ode state space
-    deg_dist = ips.get_empirical_degree_distribution()
-    deg_supp = [i for (i, p) in deg_dist.items() if p > 0]
+    deg_dist = ips.deg_dist
+    deg_supp = ips.deg_supp
 
     if ips.vertex_type_space is None and ips.edge_type_space is None:
         vertex_state_space = [(root,) + children for k in deg_supp for (root, children) in
@@ -208,6 +210,10 @@ def simulate_markov_lfe(
         edge_type_space = [root_children for k in deg_supp for root_children in product(ips.edge_type_space, repeat=k)]
         ode_state_space = [(state, type) for state in vertex_state_space for type in edge_type_space if
                            len(state) == len(type) + 1]
+    else:
+        raise NotImplementedError(
+            "JAX backend does not support both vertex and edge type spaces simultaneously."
+        )
 
     index_to_ode_state_space = {i: state for i, state in enumerate(ode_state_space)}
     ode_state_space_to_index = {state: i for i, state in enumerate(ode_state_space)}
@@ -232,19 +238,25 @@ def simulate_markov_lfe(
             raise ValueError("JAX backend requires 'params' attribute in ParticleSystem.")
         rate_params = ips.params
 
-        # Build static structure
-        static_args, sparse_indices = jax_build_static_maps_vmap(
-            ips, ode_state_space, vertex_state_space, ips.get_state_to_index_map(), ode_state_space_to_index,
-            jax_gamma_index_builder_vmap,
-            vertex_type_space=vertex_type_space if ips.vertex_type_space is not None else None,
-            edge_type_space=edge_type_space if ips.edge_type_space is not None else None
-        )
+        if static_args is None or sparse_indices is None:
+            # Build static structure
+            static_args, sparse_indices = jax_build_static_maps_vmap(
+                ips,
+                ode_state_space,
+                vertex_state_space,
+                ips.get_state_to_index_map(),
+                ode_state_space_to_index,
+                jax_gamma_index_builder_vmap,
+                vertex_type_space=vertex_type_space if ips.vertex_type_space is not None else None,
+                edge_type_space=edge_type_space if ips.edge_type_space is not None else None
+            )
 
         # Create rate caller
-        rate_caller = make_rate_caller(ips.rate_vectorized,
-                                       rate_params,
-                                       ips.vertex_type_space is not None,
-                                       ips.edge_type_space is not None)
+        if rate_caller is None:
+            rate_caller = make_rate_caller(ips.rate_vectorized,
+                                           rate_params,
+                                           ips.vertex_type_space is not None,
+                                           ips.edge_type_space is not None)
         static_args["rate_caller"] = rate_caller
 
         # define vector field
@@ -254,15 +266,14 @@ def simulate_markov_lfe(
             raise ValueError("Backend does not support global interactions in non-vectorized mode.")
         # Build static structure
         static_args, _ = jax_build_static_maps(ips, ode_state_space, vertex_state_space, ode_state_space_to_index,
-                                           jax_gamma_index_builder,
-                                           vertex_type_space=vertex_type_space if ips.vertex_type_space is not None else None,
-                                           edge_type_space=edge_type_space if ips.edge_type_space is not None else None)
+                                               jax_gamma_index_builder,
+                                               vertex_type_space=vertex_type_space if ips.vertex_type_space is not None else None,
+                                               edge_type_space=edge_type_space if ips.edge_type_space is not None else None)
         # define vector field
         term = diffrax.ODETerm(jax_mlfe_vector_field)
 
     # Set up ODE solver
     # Initialize
-    # [Keep initial condition calculation - same as before]
     if ips.vertex_type_space is None and ips.edge_type_space is None:
         ode_init = [initial_conditions[state[0]] * deg_dist[len(state) - 1] * np.prod(
             [initial_conditions[child] for child in state[1:]]) for state in ode_state_space]
@@ -321,7 +332,7 @@ def simulate_markov_lfe(
         stepsize_controller=step_controller,
         saveat=saveat,
         max_steps=100000,
-        progress_meter=diffrax.TqdmProgressMeter() if verbose else diffrax.NoProgressMeter()
+        progress_meter=diffrax.TqdmProgressMeter() if verbose else diffrax.NoProgressMeter(),
     )
 
     return sol.ts, sol.ys.transpose(), index_to_ode_state_space

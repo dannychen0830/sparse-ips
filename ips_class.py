@@ -62,16 +62,6 @@ class ParticleSystem:
         """
         raise NotImplementedError("Subclasses should implement this method.")
 
-    def rate_vectorized(self,
-                        src,
-                        tgt,
-                        neighbors,
-                        params=None,
-                        vertex_types=None,
-                        edge_types=None,
-                        meas=None):
-        pass
-
     def get_empirical_degree_distribution(self):
         if self.deg_dist is not None:
             return self.deg_dist
