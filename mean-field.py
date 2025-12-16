@@ -434,7 +434,7 @@ def simulate_mean_field(
 #         return -10 * (1 - p[n_states - 1] - p[0]) / n_states + ca.sumsqr(u) / n_states
 #
 #     def terminal_cost(p):
-#         return -100 * p[n_states - 1]
+#         return -100-adam * p[n_states - 1]
 #
 #     # Initial condition
 #     p0 = np.ones(n_states) / n_states

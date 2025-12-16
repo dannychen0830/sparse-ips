@@ -299,7 +299,8 @@ def simulate_markov_lfe(
 
     # Choose solver
     if solver_type == 'implicit':
-        linear_solver = lx.GMRES(rtol=1e-3, atol=1e-3, restart=20)
+        linear_solver = lx.GMRES(rtol=1e-2, atol=1e-2, restart=20)
+        # linear_solver = lx.AutoLinearSolver(well_posed=False)
         root_finder = optx.Newton(rtol=1e-3, atol=1e-3, linear_solver=linear_solver)
         solver = diffrax.Kvaerno3(root_finder=root_finder)
     elif solver_type == 'explicit':
@@ -312,7 +313,7 @@ def simulate_markov_lfe(
 
     # Choose step controller
     if step_control == 'adaptive':
-        step_controller = diffrax.PIDController(rtol=1e-3, atol=1e-9)
+        step_controller = diffrax.PIDController(rtol=1e-6, atol=1e-12)
     elif step_control == 'constant':
         step_controller = diffrax.ConstantStepSize()
     else:
