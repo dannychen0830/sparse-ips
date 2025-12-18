@@ -109,6 +109,7 @@ def jax_mlfe_vector_field_vmap(t, p, args):
         args["neighbors_vertex_types"],
         args["neighbors_edge_types"],
         p,
+        t
     )
 
     # -------------------------------------------------
@@ -121,7 +122,8 @@ def jax_mlfe_vector_field_vmap(t, p, args):
         args["gamma_neighbors"],
         args["gamma_neighbors_vertex_types"],
         args["gamma_neighbors_edge_types"],
-        p
+        p,
+        t
     )
 
     # -------------------------------------------------
@@ -313,7 +315,7 @@ def simulate_markov_lfe(
 
     # Choose step controller
     if step_control == 'adaptive':
-        step_controller = diffrax.PIDController(rtol=1e-6, atol=1e-12)
+        step_controller = diffrax.PIDController(rtol=1e-9, atol=1e-12)
     elif step_control == 'constant':
         step_controller = diffrax.ConstantStepSize()
     else:

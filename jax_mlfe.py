@@ -51,7 +51,7 @@ def make_rate_caller(rate_func_vectorized, params, has_vertex_types, has_edge_ty
     - Type handling
     """
     @jax.jit
-    def call_rates(src, tgt, neighbors, vertex_types, edge_types, meas):
+    def call_rates(src, tgt, neighbors, vertex_types, edge_types, meas, t):
         """
         Vectorized rate computation.
 
@@ -76,82 +76,24 @@ def make_rate_caller(rate_func_vectorized, params, has_vertex_types, has_edge_ty
         if has_vertex_types:
             masked_vertex_types = jnp.where(valid_mask, vertex_types, 0)
             rates = jax.vmap(
-                lambda s, t, n, vt, p: rate_func_vectorized(
-                    s, t, n, vertex_types=vt, params=params, meas=p
+                lambda src, tgt, nei, vt, p, t: rate_func_vectorized(
+                    src, tgt, nei, vertex_types=vt, params=params, meas=p, t=t
                 ),
-                in_axes=(0, 0, 0, 0, None)
-            )(src, tgt, masked_neighbors, masked_vertex_types, meas)
+                in_axes=(0, 0, 0, 0, None, None)
+            )(src, tgt, masked_neighbors, masked_vertex_types, meas, t)
         elif has_edge_types:
             masked_edge_types = jnp.where(valid_mask, edge_types, 0)
             rates = jax.vmap(
-                lambda s, t, n, et, p: rate_func_vectorized(
-                    s, t, n, edge_types=et, params=params, meas=p
+                lambda src, tgt, nei, et, p, t: rate_func_vectorized(
+                    src, tgt, nei, edge_types=et, params=params, meas=p, t=t
                 ),
-                in_axes=(0, 0, 0, 0, None)
-            )(src, tgt, masked_neighbors, masked_edge_types, meas)
+                in_axes=(0, 0, 0, 0, None, None)
+            )(src, tgt, masked_neighbors, masked_edge_types, meas, t)
         else:
             rates = jax.vmap(
-                lambda s, t, n, p: rate_func_vectorized(s, t, n, params=params, meas=p),
-                in_axes=(0, 0, 0, None)
-            )(src, tgt, masked_neighbors, meas)
-
-        return rates
-
-    return call_rates
-
-
-def make_rate_caller_(rate_func_vectorized, params, has_vertex_types, has_edge_types):
-    """
-    Creates a wrapper around the user's rate function that handles:
-    - Parameter passing
-    - Masking padded values
-    - Type handling
-    """
-    def call_rates(src, tgt, neighbors, vertex_types, edge_types, meas):
-        """
-        Vectorized rate computation.
-
-        Args:
-            src: (N,) array of source states
-            tgt: (N,) array of target states
-            neighbors: (N, max_neighbors) array of neighbor states (padded with -1) TODO: update max_neighbors + 1
-            vertex_types: (N, max_neighbors) array of vertex types (padded with -1)
-            edge_types: (N, max_neighbors) array of edge types (padded with -1)
-            has_vertex_types: bool
-            has_edge_types: bool
-
-        Returns:
-            (N,) array of rates
-        """
-        # Mask out padded neighbors (-1 values)
-        # This ensures padded values don't affect sums/counts
-        valid_mask = neighbors >= 0
-        masked_neighbors = jnp.where(valid_mask, neighbors, 0)
-
-        # Call user's rate function
-        if has_vertex_types:
-            masked_vertex_types = jnp.where(valid_mask, vertex_types, 0)
-            rates = jax.vmap(
-                lambda s, t, n, vt, p: rate_func_vectorized(
-                    s, t, n, vertex_types=vt, meas=p
-                ),
-                in_axes=(0, 0, 0, 0, None)
-            )(src, tgt, masked_neighbors, masked_vertex_types, meas)
-        elif has_edge_types:
-            masked_edge_types = jnp.where(valid_mask, edge_types, 0)
-            rates = jax.vmap(
-                lambda s, t, n, et, p: rate_func_vectorized(
-                    s, t, n, edge_types=et, meas=p
-                ),
-                in_axes=(0, 0, 0, 0, None)
-            )(src, tgt, masked_neighbors, masked_edge_types, meas)
-        else:
-            rates = jax.vmap(
-                lambda s, t, n, p: rate_func_vectorized(
-                    s, t, n, meas=p
-                ),
-                in_axes=(0, 0, 0, None)
-            )(src, tgt, masked_neighbors, meas)
+                lambda src, tgt, nei, p, t: rate_func_vectorized(src, tgt, nei, params=params, meas=p, t=t),
+                in_axes=(0, 0, 0, None, None)
+            )(src, tgt, masked_neighbors, meas, t)
 
         return rates
 
