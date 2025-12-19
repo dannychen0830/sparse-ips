@@ -10,6 +10,32 @@ from functools import partial
 ###########################
 # JIT-related helpers
 ###########################
+def compute_ode_state_to_index(ips):
+    deg_supp = ips.deg_supp
+
+    if ips.vertex_type_space is None and ips.edge_type_space is None:
+        vertex_state_space = [(root,) + children for k in deg_supp for (root, children) in
+                              product(ips.state_space, product(ips.state_space, repeat=k))]
+        ode_state_space = vertex_state_space
+    elif ips.vertex_type_space is not None and ips.edge_type_space is None:
+        vertex_state_space = [(root,) + children for k in deg_supp for (root, children) in
+                              product(ips.state_space, product(ips.state_space, repeat=k))]
+        vertex_type_space = [(root,) + children for k in deg_supp for (root, children) in
+                             product(ips.vertex_type_space, product(ips.vertex_type_space, repeat=k))]
+        ode_state_space = [(state, type) for state in vertex_state_space for type in vertex_type_space if
+                           len(state) == len(type)]
+    elif ips.vertex_type_space is None and ips.edge_type_space is not None:
+        vertex_state_space = [(root,) + children for k in deg_supp for (root, children) in
+                              product(ips.state_space, product(ips.state_space, repeat=k))]
+        edge_type_space = [root_children for k in deg_supp for root_children in product(ips.edge_type_space, repeat=k)]
+        ode_state_space = [(state, type) for state in vertex_state_space for type in edge_type_space if
+                           len(state) == len(type) + 1]
+
+    ode_state_space_to_index = {state: i for i, state in enumerate(ode_state_space)}
+
+    return ode_state_space_to_index
+
+
 def compute_jax_static_args(ips):
     deg_supp = ips.deg_supp
 
