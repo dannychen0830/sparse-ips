@@ -4,3 +4,4 @@ from .markov_lfe import *
 from .visualization import *
 from .util import *
 from .optimization import *
+from .mean_field import *

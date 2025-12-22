@@ -3,7 +3,6 @@ from sparseips.jump_ips_sim import simulate_mean_field_jump_process, get_particl
 from sparseips.jax_mlfe import *
 
 from jax.experimental import sparse
-import jax
 import jax.numpy as jnp
 import diffrax
 import lineax as lx

@@ -1,43 +1,104 @@
-from ips_class import MeanFieldParticleSystem
+from sparseips.ips_class import MeanFieldParticleSystem
 
-import numpy as np
-from scipy.integrate import solve_ivp
+import diffrax
+import jax
+import jax.numpy as jnp
+import lineax as lx
+import optimistix as optx
+
 # import casadi as ca
 
 
+def mf_rate_caller(rate_fn_vectorized, params):
+    @jax.jit
+    def call_rates(src, tgt, meas, t):
+        def single_rate(s, tg):
+            return rate_fn_vectorized(s, tg, meas, t=t, params=params)
+
+        vmap_cols = jax.vmap(single_rate, in_axes=(0, 0))
+        vmap_rows = jax.vmap(vmap_cols, in_axes=(0, 0))
+
+        return vmap_rows(src, tgt)
+
+    return call_rates
+
+
+def jax_mf_vector_field(t, p, args):
+    rate_caller = args['rate_caller']
+    Q_full = rate_caller(args['src'], args['tgt'], p, t)
+
+    Q_zero_diag = Q_full.at[jnp.diag_indices_from(Q_full)].set(0.0)
+
+    Q = Q_zero_diag - jnp.diag(jnp.sum(Q_zero_diag, axis=1))
+
+    return Q.T @ p
+
+
 def simulate_mean_field(
-    mfps: MeanFieldParticleSystem,
-    initial_conditions: dict[any, float],
-    max_time: float,
-    num_grid_points: int = 100,
+        mfps: MeanFieldParticleSystem,
+        initial_conditions: dict[any, float],
+        max_time: float,
+        num_grid_points: int = 100,
+        solver_type: str = 'explicit',
+        step_control: str = 'adaptive',
+        verbose: bool = False,
 ):
     d = len(mfps.state_space)
 
-    # simulate mean-field ode
-    def mf_ode(t, y):
-        # set up rate matrix
-        rate_matrix = np.zeros((d, d))
-        for i, src in enumerate(mfps.state_space):
-            for j, tgt in enumerate(mfps.state_space):
-                rate_matrix[i, j] = mfps.rate(src, tgt, y)
-
-        # compute derivative
-        dydt = np.zeros(d)
-        for i in range(d):
-            inflow = sum(rate_matrix[j, i] * y[j] for j in range(d) if j != i)
-            outflow = sum(rate_matrix[i, j] * y[i] for j in range(d) if j != i)
-            dydt[i] = inflow - outflow
-
-        return dydt
+    # set up jax indexing
+    src_indices = jnp.ones((d, d), dtype=jnp.int32) * jnp.arange(d).reshape((d, 1))
+    tgt_indices = jnp.ones((d, d), dtype=jnp.int32) * jnp.arange(d).reshape((1, d))
+    static_args = {
+        'src': src_indices,
+        'tgt': tgt_indices,
+        'rate_caller': mf_rate_caller(mfps.rate_vectorized, mfps.params),
+    }
 
     # initial condition vector
-    y0 = np.array([initial_conditions.get(state, 0.0) for state in mfps.state_space])
-    t_span = (0, max_time)
-    t_eval = np.linspace(0, max_time, num_grid_points)
-    sol = solve_ivp(mf_ode, t_span, y0, t_eval=t_eval, vectorized=True)
+    y0 = jnp.array([initial_conditions.get(state, 0.0) for state in mfps.state_space])
 
-    return sol.t, sol.y
+    # Choose solver
+    if solver_type == 'implicit':
+        linear_solver = lx.GMRES(rtol=1e-2, atol=1e-2, restart=20)
+        # linear_solver = lx.AutoLinearSolver(well_posed=False)
+        root_finder = optx.Newton(rtol=1e-3, atol=1e-3, linear_solver=linear_solver)
+        solver = diffrax.Kvaerno3(root_finder=root_finder)
+    elif solver_type == 'explicit':
+        solver = diffrax.Dopri5()
+    else:
+        raise ValueError(f'Unknown solver type: {solver_type}')
 
+    # Define output times
+    saveat = diffrax.SaveAt(ts=jnp.linspace(0, max_time, num_grid_points))
+
+    # Choose step controller
+    if step_control == 'adaptive':
+        step_controller = diffrax.PIDController(rtol=1e-9, atol=1e-12)
+    elif step_control == 'constant':
+        step_controller = diffrax.ConstantStepSize()
+    else:
+        raise ValueError(f'Unknown step control type: {step_control}')
+
+    if verbose:
+        print('**** Running simulation ****')
+    term = diffrax.ODETerm(jax_mf_vector_field)
+    sol = diffrax.diffeqsolve(
+        term,
+        solver,
+        t0=0.0,
+        t1=max_time,
+        dt0=0.01,
+        y0=y0,
+        args=static_args,
+        stepsize_controller=step_controller,
+        saveat=saveat,
+        max_steps=100000,
+        progress_meter=diffrax.TqdmProgressMeter() if verbose else diffrax.NoProgressMeter(),
+    )
+
+    ode_space_to_index = mfps.get_state_to_index_map()
+    index_to_ode_space = {v: k for k, v in ode_space_to_index.items()}
+    return sol.ts, sol.ys.transpose(), index_to_ode_space
 
 # def solve_mf_optimal_control():
 #     pass

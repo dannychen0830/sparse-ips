@@ -1,6 +1,7 @@
 from sparseips.ips_class import ParticleSystem, MeanFieldParticleSystem
 from sparseips.jax_mlfe import compute_jax_static_args
 from sparseips.markov_lfe import simulate_markov_lfe
+from sparseips.mean_field import simulate_mean_field
 from sparseips.util import pad_indices
 import jax
 import optax
@@ -140,7 +141,18 @@ def optimize_policy(ips,
 
     # prepare for mean-field systems
     elif isinstance(ips, MeanFieldParticleSystem):
-        raise NotImplementedError("Optimization for MeanFieldParticleSystem is not implemented yet.")
+        def objective_fn_wrapper(params):
+            unflat_param = unflatten_fn(params)
+            if constraint_fn is not None:
+                unflat_param = constraint_fn(unflat_param)
+
+            ips.set_params(**unflat_param)
+            time, sol, _ = simulate_mean_field(
+                mfps=ips,
+                **ode_params
+            )
+
+            return objective_fn(time, sol, unflat_param)
 
     else:
         raise ValueError("Unsupported IPS type for optimization.")
@@ -165,5 +177,5 @@ def optimize_policy(ips,
             np.savez(save_dir + f'/{i}.npz', **unflatten_fn(flat_params))
 
     final_params = constraint_fn(unflatten_fn(flat_params)) if constraint_fn is not None else unflatten_fn(flat_params)
-    np.savez(save_dir + f'/final_params.npz', **final_params)
+    np.savez(save_dir + f'/params_final.npz', **final_params)
     return final_params, losses

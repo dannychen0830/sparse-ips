@@ -196,6 +196,7 @@ class MeanFieldParticleSystem:
         self.state_space = state_space
         self.num_particles = num_particles
         self.name = name
+        self.params = None
 
     @abstractmethod
     def rate(self, src: any, tgt: any, meas: dict[tuple[any], float]) -> float:
@@ -231,3 +232,10 @@ class MeanFieldParticleSystem:
         :return:
         """
         return self.rate(src, tgt, meas)
+
+    def get_state_to_index_map(self):
+        """
+        Get a mapping from state to index for the state space.
+        :return: A dictionary mapping each state to its  index.
+        """
+        return {state: i for i, state in enumerate(self.state_space)}
