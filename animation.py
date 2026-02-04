@@ -331,7 +331,7 @@ class GraphDynamicsVisualizer:
                 occupancy = count / total_nodes if total_nodes > 0 else 0
                 occupancy_history[state].append(occupancy)
 
-            # Update line data
+            # Update line sir-and-variants
             for state in self.state_space:
                 line_objects[state].set_data(time_history, occupancy_history[state])
 
@@ -345,7 +345,7 @@ class GraphDynamicsVisualizer:
 
             if self.ode_solution is not None:
                 for i, state in enumerate(self.state_space):
-                    # Get ODE data up to current frame
+                    # Get ODE sir-and-variants up to current frame
                     ode_line_objects[state].set_data(
                         time_history, self.ode_solution[i, : len(time_history)]
                     )

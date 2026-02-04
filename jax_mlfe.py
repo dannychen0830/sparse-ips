@@ -192,7 +192,7 @@ def jax_build_static_maps(ips, ode_state_space, vertex_state_space, ode_state_to
     rows = []
     cols = []
 
-    # Lists to store data needed for Root Jumps vs Neighbor Jumps
+    # Lists to store sir-and-variants needed for Root Jumps vs Neighbor Jumps
     # We split them because they have different rate calculations
     root_jump_indices = []  # Indices in 'rows' that are root jumps
     neighbor_jump_indices = []  # Indices in 'rows' that are neighbor jumps (use gamma)
@@ -386,18 +386,18 @@ def jax_build_static_maps_vmap(ips, ode_state_space, vertex_state_space, state_t
     root_jump_indices = []
     neighbor_jump_indices = []
 
-    # Root jump data: store as lists then convert to arrays
+    # Root jump sir-and-variants: store as lists then convert to arrays
     root_src_list = []
     root_tgt_list = []
     root_neighbor_states_list = []
     root_neighbor_vertex_types_list = []
     root_neighbor_edge_types_list = []
 
-    # Gamma data structures
+    # Gamma sir-and-variants structures
     gamma_dependency_indices = []
     gamma_weights = []
 
-    # Flattened gamma term data
+    # Flattened gamma term sir-and-variants
     gamma_src_list = []
     gamma_tgt_list = []
     gamma_neighbor_states_list = []
@@ -552,7 +552,7 @@ def jax_build_static_maps_vmap(ips, ode_state_space, vertex_state_space, state_t
         "rows": jnp.array(rows, dtype=jnp.int32),
         "cols": jnp.array(cols, dtype=jnp.int32),
 
-        # Root jump data
+        # Root jump sir-and-variants
         "root_idx_map": jnp.array(root_jump_indices, dtype=jnp.int32),
         "root_src": jnp.array([state_to_index[s] for s in root_src_list], dtype=jnp.int32),
         "root_tgt": jnp.array([state_to_index[s] for s in root_tgt_list], dtype=jnp.int32),
@@ -560,12 +560,12 @@ def jax_build_static_maps_vmap(ips, ode_state_space, vertex_state_space, state_t
         "neighbors_vertex_types": jnp.array(root_neighbor_vertex_types_padded, dtype=jnp.int32),
         "neighbors_edge_types": jnp.array(root_neighbor_edge_types_padded, dtype=jnp.int32),
 
-        # Neighbor jump data
+        # Neighbor jump sir-and-variants
         "neigh_idx_map": jnp.array(neighbor_jump_indices, dtype=jnp.int32),
         "gamma_indices": jnp.array(gamma_indices_padded, dtype=jnp.int32),
         "gamma_weights": jnp.array(gamma_weights_padded, dtype=jnp.float32),
 
-        # Flattened gamma term data (for vectorized rate calls)
+        # Flattened gamma term sir-and-variants (for vectorized rate calls)
         "gamma_src": jnp.array([state_to_index[s] for s in gamma_src_list], dtype=jnp.int32),
         "gamma_tgt": jnp.array([state_to_index[s] for s in gamma_tgt_list], dtype=jnp.int32),
         "gamma_neighbors": jnp.array(gamma_neighbor_states_padded, dtype=jnp.int32),
