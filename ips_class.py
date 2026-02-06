@@ -16,7 +16,7 @@ class ParticleSystem:
             vertex_type: dict[int, any] = None,
             edge_type_space: list[any] = None,
             edge_type: dict[tuple[int, int], any] = None,
-            edge_state: list[any] = None,
+            edge_state_space: list[any] = None,
             edge_rate: callable = None,
             global_interaction: bool = False,
     ):
@@ -41,7 +41,7 @@ class ParticleSystem:
         self.vertex_type = vertex_type
         self.edge_type_space = edge_type_space
         self.edge_type = edge_type
-        self.edge_state = edge_state
+        self.edge_state_space = edge_state_space
         self.edge_rate = edge_rate
         self.global_interaction = global_interaction
 
@@ -158,6 +158,7 @@ class ParticleSystem:
             target_state: any,
             current_config: dict[int, any],
             meas: dict[tuple[any], float] = None,
+            current_edge_state: dict[tuple[int, int], any] = None,
     ):
         # get neighbors of the source state
         neighbors_state = tuple(
@@ -179,6 +180,17 @@ class ParticleSystem:
                 for neighbor in self.graph.neighbors(node)
             ]
         )
+
+        # get neighbors edge state
+        neighbors_edge_state = (
+            None
+            if self.edge_state_space is None
+            else [
+                current_edge_state[tuple(sorted((node, neighbor)))]
+                for neighbor in self.graph.neighbors(node)
+            ]
+        )
+
         # get global neighborhood empirical measure in the form of dictionary
         if self.global_interaction and meas is None:
             global_empirical_measure = self.compute_global_empirical_measure(current_config)
@@ -191,6 +203,7 @@ class ParticleSystem:
             neighbors_state,
             neighbors_vertex_type=neighbors_vertex_type,
             neighbors_edge_type=neighbors_edge_type,
+            neighbors_edge_state=neighbors_edge_state,
             meas=global_empirical_measure,
         )
 

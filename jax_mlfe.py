@@ -69,7 +69,7 @@ def compute_jax_static_args(ips):
     return ode_state_space_to_index, static_args, sparse_indices
 
 
-def make_rate_caller(rate_func_vectorized, params, has_vertex_types, has_edge_types):
+def make_rate_caller(rate_func_vectorized, params, has_vertex_types, has_edge_types, has_edge_states):
     """
     Creates a wrapper around the user's rate function that handles:
     - Parameter passing
@@ -118,6 +118,40 @@ def make_rate_caller(rate_func_vectorized, params, has_vertex_types, has_edge_ty
 
     return call_rates
 
+
+def make_vertex_rate_caller(rate_func_vectorized, params):
+    @jax.jit
+    def call_rates(src, tgt, neighbors, edge_states, meas, t):
+        valid_mask = neighbors >= 0
+        masked_neighbors = jnp.where(valid_mask, neighbors, 0)
+        masked_edge_states = jnp.where(valid_mask, edge_states, 0)
+
+        rates = jax.vmap(
+            lambda src, tgt, nei, es, p, t: rate_func_vectorized(
+                src, tgt, nei, edge_states=es, params=params, meas=p, t=t
+            ),
+            in_axes=(0, 0, 0, 0, None, None)
+        )(src, tgt, masked_neighbors, masked_edge_states, meas, t)
+
+        return rates
+
+    return call_rates
+
+# vmap edge rate is much simpler since we only support one additional feature at a time (no vertex and edge types)
+# TODO: check if this can be simplified once InteractionContext is introduced since its signature is the same as vertex rate
+def make_edge_rate_caller(rate_func_vectorized, params):
+    @jax.jit
+    def call_rates(src, tgt, neighbors, meas, t):
+        rates = jax.vmap(
+            lambda src, tgt, nei, p, t: rate_func_vectorized(src, tgt, nei, params=params, meas=p, t=t),
+            in_axes=(0, 0, 0, None, None)
+        )(src, tgt, neighbors, meas, t)
+
+        return rates
+
+    return call_rates
+
+
 ###########################
 ###########################
 
@@ -125,14 +159,15 @@ def make_rate_caller(rate_func_vectorized, params, has_vertex_types, has_edge_ty
 ###########################
 # general helper functions
 ###########################
-def one_coordinate_apart(tuple1: tuple, tuple2: tuple) -> bool:
-    """
+def x_coordinate_apart(tuple1: tuple, tuple2: tuple, x: int = 1) -> bool:
+    """ 
     Check if two tuples are one coordinate apart, i.e., they differ in exactly one coordinate.
     :param tuple1: first input tuple
     :param tuple2: second input tuple
-    :return: True if the tuples differ in exactly one coordinate, False otherwise
+    :param x: the coordinate to check
+    :return: True if the tuples differ in exactly x coordinate, False otherwise
     """
-    return len(tuple1) == len(tuple2) and sum(x != y for x, y in zip(tuple1, tuple2)) == 1
+    return len(tuple1) == len(tuple2) and sum(x != y for x, y in zip(tuple1, tuple2)) == x
 
 
 ###########################
@@ -185,7 +220,7 @@ def jax_build_static_maps(ips, ode_state_space, vertex_state_space, ode_state_to
     rows = []
     cols = []
 
-    # Lists to store sir-and-variants needed for Root Jumps vs Neighbor Jumps
+    # Lists to store  needed for Root Jumps vs Neighbor Jumps
     # We split them because they have different rate calculations
     root_jump_indices = []  # Indices in 'rows' that are root jumps
     neighbor_jump_indices = []  # Indices in 'rows' that are neighbor jumps (use gamma)
@@ -204,7 +239,7 @@ def jax_build_static_maps(ips, ode_state_space, vertex_state_space, ode_state_to
     transition_idx = -1
     for src, tgt in product(vertex_state_space, repeat=2):
 
-        if one_coordinate_apart(src, tgt):
+        if x_coordinate_apart(src, tgt):
             type_space = ['empty']
             if ips.vertex_type_space is not None and ips.edge_type_space is None:
                 type_space = vertex_type_space
@@ -379,18 +414,18 @@ def jax_build_static_maps_vmap(ips, ode_state_space, vertex_state_space, state_t
     root_jump_indices = []
     neighbor_jump_indices = []
 
-    # Root jump sir-and-variants: store as lists then convert to arrays
+    # Root jump : store as lists then convert to arrays
     root_src_list = []
     root_tgt_list = []
     root_neighbor_states_list = []
     root_neighbor_vertex_types_list = []
     root_neighbor_edge_types_list = []
 
-    # Gamma sir-and-variants structures
+    # Gamma  structures
     gamma_dependency_indices = []
     gamma_weights = []
 
-    # Flattened gamma term sir-and-variants
+    # Flattened gamma term 
     gamma_src_list = []
     gamma_tgt_list = []
     gamma_neighbor_states_list = []
@@ -404,7 +439,7 @@ def jax_build_static_maps_vmap(ips, ode_state_space, vertex_state_space, state_t
     transition_idx = -1
 
     for src, tgt in product(vertex_state_space, repeat=2):
-        if one_coordinate_apart(src, tgt):
+        if x_coordinate_apart(src, tgt):
             type_space = ['empty']
             if ips.vertex_type_space is not None and ips.edge_type_space is None:
                 type_space = vertex_type_space
@@ -545,7 +580,7 @@ def jax_build_static_maps_vmap(ips, ode_state_space, vertex_state_space, state_t
         "rows": jnp.array(rows, dtype=jnp.int32),
         "cols": jnp.array(cols, dtype=jnp.int32),
 
-        # Root jump sir-and-variants
+        # Root jump 
         "root_idx_map": jnp.array(root_jump_indices, dtype=jnp.int32),
         "root_src": jnp.array([state_to_index[s] for s in root_src_list], dtype=jnp.int32),
         "root_tgt": jnp.array([state_to_index[s] for s in root_tgt_list], dtype=jnp.int32),
@@ -553,12 +588,12 @@ def jax_build_static_maps_vmap(ips, ode_state_space, vertex_state_space, state_t
         "neighbors_vertex_types": jnp.array(root_neighbor_vertex_types_padded, dtype=jnp.int32),
         "neighbors_edge_types": jnp.array(root_neighbor_edge_types_padded, dtype=jnp.int32),
 
-        # Neighbor jump sir-and-variants
+        # Neighbor jump 
         "neigh_idx_map": jnp.array(neighbor_jump_indices, dtype=jnp.int32),
         "gamma_indices": jnp.array(gamma_indices_padded, dtype=jnp.int32),
         "gamma_weights": jnp.array(gamma_weights_padded, dtype=jnp.float32),
 
-        # Flattened gamma term sir-and-variants (for vectorized rate calls)
+        # Flattened gamma term  (for vectorized rate calls)
         "gamma_src": jnp.array([state_to_index[s] for s in gamma_src_list], dtype=jnp.int32),
         "gamma_tgt": jnp.array([state_to_index[s] for s in gamma_tgt_list], dtype=jnp.int32),
         "gamma_neighbors": jnp.array(gamma_neighbor_states_padded, dtype=jnp.int32),
@@ -577,3 +612,251 @@ def jax_build_static_maps_vmap(ips, ode_state_space, vertex_state_space, state_t
 
 ###########################
 ###########################
+
+
+###########################
+# indexing with global dependency and edge evolution (jit and vectorize rate)
+###########################
+
+def jax_gamma_index_builder_vmap_dynamic_weights(ips, src, tgt, root_state, one_state, root_one_state):
+    """
+    Returns metadata for gamma calculation.
+    [(weight, rate_args, state_index), ...]
+    where rate_args is a dict with everything needed to call ips.rate later.
+    """
+
+    return [
+        [
+            (1 + len(remaining_state)),
+            {
+                'src': one_state,
+                'tgt': tgt,
+                'neighbor_states': remaining_state,
+                'neighbors_edge_state': (root_one_state,) + remaining_type,
+            },
+            ((root_state, one_state) + remaining_state, (root_one_state,) + remaining_type)
+        ]
+        for k in ips.deg_supp
+        for remaining_state in product(ips.state_space, repeat=k - 1)
+        for remaining_type in product(ips.edge_state_space, repeat=k - 1)
+    ]
+
+
+# TODO: merge this with jax_build_static_maps_vmap to reduce duplicate code
+def jax_build_static_maps_vmap_dynamic_weights(ips, ode_state_space, vertex_state_space, state_to_index, ode_state_to_index,
+                          gamma_logic_func, edge_state_space):
+    """
+    Pre-computes static structure for JAX.
+    OPTIMIZED: Converts states to Integers IMMEDIATELY to prevent OOM errors.
+    """
+
+    """
+        Pre-computes static structure for JAX. Returns arrays that describe:
+        - Sparse matrix structure (rows, cols)
+        - Which transitions are root vs neighbor jumps
+        - Flattened arrays of ALL rate function arguments
+        """
+
+    rows = []
+    cols = []
+    root_jump_indices = []
+    neighbor_jump_indices = []
+    edge_jump_indices = []
+
+    # Root jump : store as lists then convert to arrays
+    root_src_list = []
+    root_tgt_list = []
+    root_neighbor_states_list = []
+    root_neighbor_edge_states_list = []
+
+    edge_src_list = []
+    edge_tgt_list = []
+    edge_neighbor_vertex_states_list = []
+
+    # Gamma  structures
+    gamma_dependency_indices = []
+    gamma_weights = []
+
+    # Flattened gamma term 
+    gamma_src_list = []
+    gamma_tgt_list = []
+    gamma_neighbor_states_list = []
+    gamma_neighbor_vertex_types_list = []
+    gamma_neighbor_edge_types_list = []
+    gamma_neighbor_edge_states_list = []
+
+    # build mapping gamma gather map indices
+    current_flat_index = 0
+    gamma_gather_indices_list = []
+
+    transition_idx = -1
+
+    for src, tgt in product(vertex_state_space, repeat=2):
+        # gather indices for vertex jumps
+        if x_coordinate_apart(src, tgt):
+
+            # neighbor_types here refers to the state of the dynamic edges
+            for neighbor_types in edge_state_space:
+                if len(neighbor_types) == len(src) - 1:
+                    transition_idx += 1
+
+                    row_idx = ode_state_to_index[(src, neighbor_types)]
+                    col_idx = ode_state_to_index[(tgt, neighbor_types)]
+
+                    rows.append(row_idx)
+                    cols.append(col_idx)
+
+                    # ROOT JUMP
+                    if src[0] != tgt[0]:
+                        root_jump_indices.append(transition_idx)
+                        root_src_list.append(src[0])
+                        root_tgt_list.append(tgt[0])
+                        root_neighbor_states_list.append(src[1:])
+                        root_neighbor_edge_states_list.append(neighbor_types)
+                        
+                    # NEIGHBOR JUMP
+                    else:
+                        neighbor_jump_indices.append(transition_idx)
+                        changed_index = next(i for i in range(len(src)) if src[i] != tgt[i])
+
+                        # Get gamma logic
+                        needed_terms = gamma_logic_func(
+                            ips, src[changed_index], tgt[changed_index],
+                            src[changed_index], src[0],
+                            root_one_state = neighbor_types[changed_index-1]
+                        )
+
+                        # Extract indices and weights
+                        term_indices = [ode_state_to_index[s] for w, rate_args, s in needed_terms]
+                        term_weights = [w for w, rate_args, s in needed_terms]
+
+                        gamma_dependency_indices.append(term_indices)
+                        gamma_weights.append(term_weights)
+
+                        count = len(needed_terms)
+                        indices = list(range(current_flat_index, current_flat_index + count))
+                        gamma_gather_indices_list.append(indices)
+                        current_flat_index += count
+
+                        # Flatten all rate arguments for vectorized computation
+                        for w, rate_args, s in needed_terms:
+                            gamma_src_list.append(rate_args['src'])
+                            gamma_tgt_list.append(rate_args['tgt'])
+                            gamma_neighbor_states_list.append(rate_args['neighbor_states'])
+                            gamma_neighbor_edge_states_list.append(rate_args['neighbors_edge_state'])
+            
+    # gather indices for edge jumps
+    for src, tgt in product(edge_state_space, repeat=2):
+        if x_coordinate_apart(src, tgt, x=2):
+            # change indices must have 0
+            changed_indices = [i for i in range(len(src)) if src[i] != tgt[i]]
+            if changed_indices[0] != 0:
+                continue
+
+            # TODO: this can be optimized as edges are permutation invariant
+            changed_index = changed_indices[1]
+            for vertex_neighborhood_types in vertex_state_space:
+                transition_idx += 1
+
+                row_idx = ode_state_to_index[(vertex_neighborhood_types, src)]
+                col_idx = ode_state_to_index[(vertex_neighborhood_types, tgt)]
+
+                rows.append(row_idx)
+                cols.append(col_idx)
+                edge_jump_indices.append(transition_idx)
+
+                edge_src_list.append(src[changed_index])
+                edge_tgt_list.append(tgt[changed_index])
+                edge_neighbor_vertex_states_list.append((vertex_neighborhood_types[0], vertex_neighborhood_types[1]))
+
+
+    # Convert lists to padded arrays
+    # Root jumps
+    max_neighbors = max(ips.deg_supp, default=0)
+    num_root_jumps = len(root_src_list)
+
+    neighbor_states_padded = np.full((num_root_jumps, max_neighbors), -1, dtype=np.int32)
+    for i, ns in enumerate(root_neighbor_states_list):
+        neighbor_states_padded[i, :len(ns)] = [state_to_index[s] for s in ns]
+
+    es_map = {s: i for i, s in enumerate(ips.edge_state_space)}
+    root_neighbor_edge_states_padded = np.full((num_root_jumps, max_neighbors), -1, dtype=np.int32)
+    for i, ns in enumerate(root_neighbor_edge_states_list):
+        root_neighbor_edge_states_padded[i, :len(ns)] = [es_map[s] for s in ns]
+
+    # Gamma terms
+    num_gamma_terms = len(gamma_src_list)
+
+    gamma_neighbor_states_padded = np.full((num_gamma_terms, max_neighbors), -1, dtype=np.int32)
+    for i, ns in enumerate(gamma_neighbor_states_list):
+        gamma_neighbor_states_padded[i, :len(ns)] = [state_to_index[s] for s in ns]
+
+    gamma_neighbor_edge_states_padded = np.full((num_gamma_terms, max_neighbors), -1, dtype=np.int32)
+    for i, ns in enumerate(gamma_neighbor_edge_states_list):
+        gamma_neighbor_edge_states_padded[i, :len(ns)] = [es_map[s] for s in ns]
+
+    # Pad gamma dependency indices and weights
+    max_terms_per_jump = max((len(x) for x in gamma_dependency_indices), default=0)
+    num_neighbor_jumps = len(neighbor_jump_indices)
+
+    gamma_indices_padded = np.zeros((num_neighbor_jumps, max_terms_per_jump), dtype=np.int32)
+    gamma_weights_padded = np.zeros((num_neighbor_jumps, max_terms_per_jump), dtype=np.float32)
+
+    # Pad the Gather Map
+    num_jumps = len(neighbor_jump_indices)
+    max_terms_per_jump = max((len(x) for x in gamma_gather_indices_list), default=0)
+    gamma_gather_map = np.zeros((num_jumps, max_terms_per_jump), dtype=np.int32)
+
+    # pad edge jumps
+    num_edge_jumps = len(edge_jump_indices)
+    edge_neighbor_vertex_states_padded = np.full((num_edge_jumps, 2), -1, dtype=np.int32)
+    for i, ns in enumerate(edge_neighbor_vertex_states_list):
+        edge_neighbor_vertex_states_padded[i, :len(ns)] = [state_to_index[s] for s in ns]
+
+    for i, inds in enumerate(gamma_gather_indices_list):
+        gamma_gather_map[i, :len(inds)] = inds
+
+    for i in range(num_neighbor_jumps):
+        n_terms = len(gamma_dependency_indices[i])
+        gamma_indices_padded[i, :n_terms] = gamma_dependency_indices[i]
+        gamma_weights_padded[i, :n_terms] = gamma_weights[i]
+
+    # Bundle everything
+    static_args = {
+        # Sparse matrix structure
+        "rows": jnp.array(rows, dtype=jnp.int32),
+        "cols": jnp.array(cols, dtype=jnp.int32),
+
+        # Root jump 
+        "root_idx_map": jnp.array(root_jump_indices, dtype=jnp.int32),
+        "root_src": jnp.array([state_to_index[s] for s in root_src_list], dtype=jnp.int32),
+        "root_tgt": jnp.array([state_to_index[s] for s in root_tgt_list], dtype=jnp.int32),
+        "neighbors": jnp.array(neighbor_states_padded, dtype=jnp.int32),
+        "neighbors_edge_states": jnp.array(root_neighbor_edge_states_padded, dtype=jnp.int32),
+
+        # Neighbor jump 
+        "neigh_idx_map": jnp.array(neighbor_jump_indices, dtype=jnp.int32),
+        "gamma_indices": jnp.array(gamma_indices_padded, dtype=jnp.int32),
+        "gamma_weights": jnp.array(gamma_weights_padded, dtype=jnp.float32),
+
+        # edge jump 
+        "edge_idx_map": jnp.array(edge_jump_indices, dtype=jnp.int32),
+        "edge_src": jnp.array([es_map[s] for s in edge_src_list], dtype=jnp.int32),
+        "edge_tgt": jnp.array([es_map[s] for s in edge_tgt_list], dtype=jnp.int32),
+        "edge_neighbors": jnp.array(edge_neighbor_vertex_states_padded, dtype=jnp.int32),
+
+        # Flattened gamma term  (for vectorized rate calls)
+        "gamma_src": jnp.array([state_to_index[s] for s in gamma_src_list], dtype=jnp.int32),
+        "gamma_tgt": jnp.array([state_to_index[s] for s in gamma_tgt_list], dtype=jnp.int32),
+        "gamma_neighbors": jnp.array(gamma_neighbor_states_padded, dtype=jnp.int32),
+        "gamma_neighbors_edge_states": jnp.array(gamma_neighbor_edge_states_padded, dtype=jnp.int32),
+
+        # Mapping from neighbor jumps to gamma terms
+        "gamma_gather_map": jnp.array(gamma_gather_map, dtype=jnp.int32),
+
+        # Metadata
+        "num_states": len(ode_state_space),
+    }
+
+    sparse_indices = jnp.stack([static_args["rows"], static_args["cols"]], axis=1)
+    return static_args, sparse_indices

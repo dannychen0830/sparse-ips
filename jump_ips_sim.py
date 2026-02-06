@@ -76,6 +76,7 @@ def simulate_jump_process(
                         target_state,
                         current_vertex_state,
                         meas=meas,
+                        current_edge_state=current_edge_state,
                     )
 
                     if transition_rate > 0:
@@ -90,7 +91,7 @@ def simulate_jump_process(
                 # sort edge 
                 edge = tuple(sorted(edge))
                 
-                for target_state in ips.edge_state:
+                for target_state in ips.edge_state_space:
                     transition_rate = ips.edge_rate(
                         edge,
                         current_edge_state[edge],
