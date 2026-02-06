@@ -107,6 +107,7 @@ def jax_mlfe_vector_field_vmap(t, p, args):
         args["neighbors"],
         args["neighbors_vertex_types"],
         args["neighbors_edge_types"],
+        args["neighbors_edge_states"],
         p,
         t
     )
@@ -123,91 +124,21 @@ def jax_mlfe_vector_field_vmap(t, p, args):
         args["gamma_neighbors"],
         args["gamma_neighbors_vertex_types"],
         args["gamma_neighbors_edge_types"],
-        p,
-        t
-    )
-
-    # -------------------------------------------------
-    # 3. Assemble gamma rates for each neighbor jump
-    # -------------------------------------------------
-    # Gather probabilities for all terms
-    term_probs = p[args["gamma_indices"]]  # (num_neighbor_jumps, max_terms)
-
-    gamma_rates = all_gamma_term_rates[args["gamma_gather_map"]]
-
-    # Calculate gamma: rate = sum(weight * prob * rate) / sum(weight * prob)
-    denom_terms = term_probs * args["gamma_weights"]
-    denoms = jnp.sum(denom_terms, axis=1)
-
-    num_terms = denom_terms * gamma_rates
-    nums = jnp.sum(num_terms, axis=1)
-
-    neigh_rates = nums / (denoms + 1e-12)  # Add epsilon to avoid division by zero
-
-    # -------------------------------------------------
-    # 4. Assemble full rate matrix
-    # -------------------------------------------------
-    total_transitions = len(args["rows"])
-    all_rates = jnp.zeros(total_transitions, dtype=jnp.float32)
-
-    # Scatter rates into full array
-    all_rates = all_rates.at[args["neigh_idx_map"]].set(neigh_rates)
-    all_rates = all_rates.at[args["root_idx_map"]].set(root_rates)
-
-    # Build sparse rate matrix Q
-    sparse_indices = jnp.stack([args["rows"], args["cols"]], axis=1)
-    Q_off = sparse.BCOO(
-        (all_rates, sparse_indices),
-        shape=(args["num_states"], args["num_states"])
-    )
-
-    # Adjust diagonal: Q[i,i] = -sum of row i (excluding diagonal)
-    row_sums = sparse.bcoo_reduce_sum(Q_off, axes=[1]).todense().reshape(-1)
-
-    # Create diagonal sparse matrix
-    diag_indices = jnp.stack([jnp.arange(args["num_states"]), jnp.arange(args["num_states"])], axis=1)
-    Q_diag = sparse.BCOO(
-        (row_sums, diag_indices),
-        shape=(args["num_states"], args["num_states"])
-    )
-
-    Q_final = Q_off - Q_diag
-
-    # Return dp/dt = Q^T @ p
-    return Q_final.T @ p
-
-
-# TODO: merge this with jax_mlfe_vector_field_vmap to reduce duplicate code
-def jax_mlfe_vector_field_vmap_dynamic_weights(t, p, args):
-    rate_caller = args["rate_caller"]
-
-    # -------------------------------------------------
-    # 1. Compute all root jump rates (vectorized)
-    # -------------------------------------------------
-    root_rates = rate_caller(
-        args["root_src"],
-        args["root_tgt"],
-        args["neighbors"],
-        args["neighbors_edge_states"],
-        p,
-        t
-    )
-
-    
-
-    # -------------------------------------------------
-    # 2. Compute all gamma term rates (vectorized)
-    # -------------------------------------------------
-    # Call rate function for ALL flattened gamma terms at once
-    all_gamma_term_rates = rate_caller(
-        args["gamma_src"],
-        args["gamma_tgt"],
-        args["gamma_neighbors"],
         args["gamma_neighbors_edge_states"],
         p,
         t
     )
 
+    # Edge rate
+    edge_rate_caller = args["edge_rate_caller"]
+    edge_rates = edge_rate_caller(
+        args["edge_src"],
+        args["edge_tgt"],
+        args["edge_neighbor_vertex_states"],
+        p,
+        t
+    )
+
     # -------------------------------------------------
     # 3. Assemble gamma rates for each neighbor jump
     # -------------------------------------------------
@@ -225,15 +156,6 @@ def jax_mlfe_vector_field_vmap_dynamic_weights(t, p, args):
 
     neigh_rates = nums / (denoms + 1e-12)  # Add epsilon to avoid division by zero
 
-    # Computer edge rates
-    edge_rates = args["edge_rate_caller"](
-        args["edge_src"],
-        args["edge_tgt"],
-        args["edge_neighbors"],
-        p,
-        t
-    )
-
     # -------------------------------------------------
     # 4. Assemble full rate matrix
     # -------------------------------------------------
@@ -243,7 +165,7 @@ def jax_mlfe_vector_field_vmap_dynamic_weights(t, p, args):
     # Scatter rates into full array
     all_rates = all_rates.at[args["neigh_idx_map"]].set(neigh_rates)
     all_rates = all_rates.at[args["root_idx_map"]].set(root_rates)
-    all_rates = all_rates.at[args["edge_idx_map"]].set(edge_rates)
+    # all_rates = all_rates.at[args["edge_idx_map"]].set(edge_rates)
 
     # Build sparse rate matrix Q
     sparse_indices = jnp.stack([args["rows"], args["cols"]], axis=1)
@@ -341,37 +263,25 @@ def simulate_markov_lfe(
 
         if static_args is None or sparse_indices is None:
             # Build static structure
-            if ips.edge_state_space is None:
-                static_args, sparse_indices = jax_build_static_maps_vmap(
-                    ips,
-                    ode_state_space,
-                    vertex_state_space, 
-                    ips.get_state_to_index_map(),
-                    ode_state_space_to_index,
-                    jax_gamma_index_builder_vmap,
-                    vertex_type_space=vertex_type_space if ips.vertex_type_space is not None else None,
-                    edge_type_space=edge_type_space if ips.edge_type_space is not None else None
-                )
+            static_args, sparse_indices = jax_build_static_maps_vmap(
+                ips,
+                ode_state_space,
+                vertex_state_space, 
+                ips.get_state_to_index_map(),
+                ode_state_space_to_index,
+                jax_gamma_index_builder_vmap,
+                vertex_type_space=vertex_type_space if ips.vertex_type_space is not None else None,
+                edge_type_space=edge_type_space if ips.edge_type_space is not None else None,
+                edge_state_space=edge_state_space if ips.edge_state_space is not None else None
+            )
 
-                 # Create rate caller
-                if rate_caller is None:
-                    rate_caller = make_rate_caller(ips.rate_vectorized,
-                                                rate_params,
-                                                ips.vertex_type_space is not None,
-                                                ips.edge_type_space is not None,
-                                                ips.edge_state_space is not None)
-
-            else:   
-                static_args, sparse_indices = jax_build_static_maps_vmap_dynamic_weights(
-                    ips,
-                    ode_state_space,
-                    vertex_state_space,
-                    ips.get_state_to_index_map(),
-                    ode_state_space_to_index,
-                    jax_gamma_index_builder_vmap_dynamic_weights,
-                    edge_state_space=edge_state_space
-                )
-                rate_caller = make_vertex_rate_caller(ips.rate_vectorized, rate_params)
+                # Create rate caller
+            if rate_caller is None:
+                rate_caller = make_rate_caller(ips.rate_vectorized,
+                                            rate_params,
+                                            ips.vertex_type_space is not None,
+                                            ips.edge_type_space is not None,
+                                            ips.edge_state_space is not None)
        
         static_args["rate_caller"] = rate_caller
 
@@ -384,13 +294,12 @@ def simulate_markov_lfe(
                     "and accept vectorized inputs. See documentation for examples."
                 )
             edge_rate_caller = make_edge_rate_caller(ips.edge_rate_vectorized, rate_params)
-            static_args["edge_rate_caller"] = edge_rate_caller
+        else:
+            edge_rate_caller = lambda *args: None
+        static_args["edge_rate_caller"] = edge_rate_caller
 
         # define vector field
-        if ips.edge_state_space is None:
-            term = diffrax.ODETerm(jax_mlfe_vector_field_vmap)
-        else:
-            term = diffrax.ODETerm(jax_mlfe_vector_field_vmap_dynamic_weights)
+        term = diffrax.ODETerm(jax_mlfe_vector_field_vmap)
     else:
         if ips.global_interaction or ips.edge_state_space is not None:
             raise ValueError("Backend does not support global interactions in non-vectorized mode.")

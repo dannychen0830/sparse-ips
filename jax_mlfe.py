@@ -77,7 +77,7 @@ def make_rate_caller(rate_func_vectorized, params, has_vertex_types, has_edge_ty
     - Type handling
     """
     @jax.jit
-    def call_rates(src, tgt, neighbors, vertex_types, edge_types, meas, t):
+    def call_rates(src, tgt, neighbors, vertex_types, edge_types, edge_states, meas, t):
         """
         Vectorized rate computation.
 
@@ -119,26 +119,6 @@ def make_rate_caller(rate_func_vectorized, params, has_vertex_types, has_edge_ty
     return call_rates
 
 
-def make_vertex_rate_caller(rate_func_vectorized, params):
-    @jax.jit
-    def call_rates(src, tgt, neighbors, edge_states, meas, t):
-        valid_mask = neighbors >= 0
-        masked_neighbors = jnp.where(valid_mask, neighbors, 0)
-        masked_edge_states = jnp.where(valid_mask, edge_states, 0)
-
-        rates = jax.vmap(
-            lambda src, tgt, nei, es, p, t: rate_func_vectorized(
-                src, tgt, nei, edge_states=es, params=params, meas=p, t=t
-            ),
-            in_axes=(0, 0, 0, 0, None, None)
-        )(src, tgt, masked_neighbors, masked_edge_states, meas, t)
-
-        return rates
-
-    return call_rates
-
-# vmap edge rate is much simpler since we only support one additional feature at a time (no vertex and edge types)
-# TODO: check if this can be simplified once InteractionContext is introduced since its signature is the same as vertex rate
 def make_edge_rate_caller(rate_func_vectorized, params):
     @jax.jit
     def call_rates(src, tgt, neighbors, meas, t):
@@ -334,14 +314,14 @@ def jax_build_static_maps(ips, ode_state_space, vertex_state_space, ode_state_to
 ###########################
 
 def jax_gamma_index_builder_vmap(ips, src, tgt, root_state, one_state, root_type=None,
-                                 one_type=None, root_one_type=None):
+                                 one_type=None, root_one_type=None, root_one_state=None):
     """
     Returns metadata for gamma calculation.
     [(weight, rate_args, state_index), ...]
     where rate_args is a dict with everything needed to call ips.rate later.
     """
 
-    if ips.vertex_type_space is None and ips.edge_type_space is None:
+    if ips.vertex_type_space is None and ips.edge_type_space is None and root_one_state is None:
         return [
             [
                 (1 + len(remaining_state)),  # weight
@@ -351,6 +331,7 @@ def jax_gamma_index_builder_vmap(ips, src, tgt, root_state, one_state, root_type
                     'neighbor_states': (one_state,) + remaining_state,
                     'neighbors_vertex_type': None,
                     'neighbors_edge_type': None,
+                    'neighbors_edge_state': None,
                 },
                 (root_state, one_state) + remaining_state  # state for indexing
             ]
@@ -358,7 +339,7 @@ def jax_gamma_index_builder_vmap(ips, src, tgt, root_state, one_state, root_type
             for remaining_state in product(ips.state_space, repeat=k - 1)
         ]
 
-    elif ips.vertex_type_space is not None and ips.edge_type_space is None:
+    elif ips.vertex_type_space is not None and ips.edge_type_space is None and root_one_state is None:
         return [
             [
                 (1 + len(remaining_state)),
@@ -368,6 +349,7 @@ def jax_gamma_index_builder_vmap(ips, src, tgt, root_state, one_state, root_type
                     'neighbor_states': (one_state,) + remaining_state,
                     'neighbors_vertex_type': (root_type, one_type) + remaining_type,
                     'neighbors_edge_type': None,
+                    'neighbors_edge_state': None,
                 },
                 ((root_state, one_state) + remaining_state, (root_type, one_type) + remaining_type)
             ]
@@ -376,7 +358,7 @@ def jax_gamma_index_builder_vmap(ips, src, tgt, root_state, one_state, root_type
             for remaining_type in product(ips.vertex_type_space, repeat=k - 1)
         ]
 
-    elif ips.vertex_type_space is None and ips.edge_type_space is not None:
+    elif ips.vertex_type_space is None and ips.edge_type_space is not None and root_one_state is None:
         return [
             [
                 (1 + len(remaining_state)),
@@ -386,6 +368,7 @@ def jax_gamma_index_builder_vmap(ips, src, tgt, root_state, one_state, root_type
                     'neighbor_states': (one_state,) + remaining_state,
                     'neighbors_vertex_type': None,
                     'neighbors_edge_type': (root_one_type,) + remaining_type,
+                    'neighbors_edge_state': None,
                 },
                 ((root_state, one_state) + remaining_state, (root_one_type,) + remaining_type)
             ]
@@ -393,10 +376,29 @@ def jax_gamma_index_builder_vmap(ips, src, tgt, root_state, one_state, root_type
             for remaining_state in product(ips.state_space, repeat=k - 1)
             for remaining_type in product(ips.edge_type_space, repeat=k - 1)
         ]
+    
+    elif ips.vertex_type_space is None and ips.edge_type_space is None and root_one_state is not None:
+        return [
+            [
+                (1 + len(remaining_state)),
+                {
+                    'src': one_state,
+                    'tgt': tgt,
+                    'neighbor_states': remaining_state,
+                    'neighbors_vertex_type': None,
+                    'neighbors_edge_type': None,
+                    'neighbors_edge_state': (root_one_state,) + remaining_edge_state,
+                },
+                ((root_state, one_state) + remaining_state, (root_one_state,) + remaining_edge_state)
+            ]
+            for k in ips.deg_supp
+            for remaining_state in product(ips.state_space, repeat=k - 1)
+            for remaining_edge_state in product(ips.edge_state_space, repeat=k - 1)
+        ]
 
 
 def jax_build_static_maps_vmap(ips, ode_state_space, vertex_state_space, state_to_index, ode_state_to_index,
-                          gamma_logic_func, vertex_type_space=None, edge_type_space=None):
+                          gamma_logic_func, vertex_type_space=None, edge_type_space=None, edge_state_space=None):
     """
     Pre-computes static structure for JAX.
     OPTIMIZED: Converts states to Integers IMMEDIATELY to prevent OOM errors.
@@ -420,6 +422,7 @@ def jax_build_static_maps_vmap(ips, ode_state_space, vertex_state_space, state_t
     root_neighbor_states_list = []
     root_neighbor_vertex_types_list = []
     root_neighbor_edge_types_list = []
+    root_neighbor_edge_states_list = []
 
     # Gamma  structures
     gamma_dependency_indices = []
@@ -431,6 +434,13 @@ def jax_build_static_maps_vmap(ips, ode_state_space, vertex_state_space, state_t
     gamma_neighbor_states_list = []
     gamma_neighbor_vertex_types_list = []
     gamma_neighbor_edge_types_list = []
+    gamma_neighbor_edge_states_list = []
+
+    # Edge jump structures
+    edge_jump_indices = []
+    edge_src_list = []
+    edge_tgt_list = []
+    edge_neighbor_vertex_states_list = []
 
     # build mapping gamma gather map indices
     current_flat_index = 0
@@ -441,16 +451,20 @@ def jax_build_static_maps_vmap(ips, ode_state_space, vertex_state_space, state_t
     for src, tgt in product(vertex_state_space, repeat=2):
         if x_coordinate_apart(src, tgt):
             type_space = ['empty']
-            if ips.vertex_type_space is not None and ips.edge_type_space is None:
+            if ips.vertex_type_space is not None and ips.edge_type_space is None and ips.edge_state_space is None:
                 type_space = vertex_type_space
-            elif ips.vertex_type_space is None and ips.edge_type_space is not None:
+            elif ips.vertex_type_space is None and ips.edge_type_space is not None and ips.edge_state_space is None:
                 type_space = edge_type_space
+            elif ips.vertex_type_space is None and ips.edge_type_space is None and ips.edge_state_space is not None:
+                type_space = edge_state_space
 
             for neighbor_types in type_space:
                 if (neighbor_types == 'empty' and ips.vertex_type_space is None and ips.edge_type_space is None) or \
                         (ips.vertex_type_space is not None and ips.edge_type_space is None
                          and len(neighbor_types) == len(src)) or \
                         (ips.vertex_type_space is None and ips.edge_type_space is not None
+                         and len(neighbor_types) == len(src) - 1) or \
+                        (ips.vertex_type_space is None and ips.edge_type_space is None
                          and len(neighbor_types) == len(src) - 1):
 
                     if neighbor_types == 'empty':
@@ -458,7 +472,7 @@ def jax_build_static_maps_vmap(ips, ode_state_space, vertex_state_space, state_t
 
                     transition_idx += 1
 
-                    if ips.vertex_type_space is None and ips.edge_type_space is None:
+                    if ips.vertex_type_space is None and ips.edge_type_space is None and ips.edge_state_space is None:
                         row_idx = ode_state_to_index[src]
                         col_idx = ode_state_to_index[tgt]
                     else:
@@ -480,6 +494,9 @@ def jax_build_static_maps_vmap(ips, ode_state_space, vertex_state_space, state_t
                         root_neighbor_edge_types_list.append(
                             neighbor_types if ips.edge_type_space is not None else ()
                         )
+                        root_neighbor_edge_states_list.append(
+                            neighbor_types if ips.edge_state_space is not None else ()
+                        )
 
                     # NEIGHBOR JUMP
                     else:
@@ -492,7 +509,12 @@ def jax_build_static_maps_vmap(ips, ode_state_space, vertex_state_space, state_t
                             src[changed_index], src[0],
                             root_type=neighbor_types[changed_index] if ips.vertex_type_space is not None else None,
                             one_type=neighbor_types[0] if ips.vertex_type_space is not None else None,
+<<<<<<< HEAD
                             root_one_type=neighbor_types[changed_index-1] if ips.edge_type_space is not None else None
+=======
+                            root_one_type=neighbor_types[0] if ips.edge_type_space is not None else None,
+                            root_one_state=neighbor_types[0] if ips.edge_state_space is not None else None
+>>>>>>> 3fbbac4... bug, checking out
                         )
 
                         # Extract indices and weights
@@ -514,6 +536,29 @@ def jax_build_static_maps_vmap(ips, ode_state_space, vertex_state_space, state_t
                             gamma_neighbor_states_list.append(rate_args['neighbor_states'])
                             gamma_neighbor_vertex_types_list.append(rate_args['neighbors_vertex_type'] or ())
                             gamma_neighbor_edge_types_list.append(rate_args['neighbors_edge_type'] or ())
+                            gamma_neighbor_edge_states_list.append(rate_args['neighbors_edge_state'] or ())
+
+    if edge_state_space is not None:
+        # gather indices for edge jumps
+        for src, tgt in product(edge_state_space, repeat=2):
+            if x_coordinate_apart(src, tgt):
+                # change indices must have 0
+                changed_index = next(i for i in range(len(src)) if src[i] != tgt[i])
+                # TODO: this can be optimized as edges are permutation invariant
+                for vertex_neighborhood_types in vertex_state_space:
+                    transition_idx += 1
+
+                    row_idx = ode_state_to_index[(vertex_neighborhood_types, src)]
+                    col_idx = ode_state_to_index[(vertex_neighborhood_types, tgt)]
+
+                    rows.append(row_idx)
+                    cols.append(col_idx)
+                    edge_jump_indices.append(transition_idx)
+
+                    edge_src_list.append(src[changed_index])
+                    edge_tgt_list.append(tgt[changed_index])
+                    edge_neighbor_vertex_states_list.append((vertex_neighborhood_types[0], vertex_neighborhood_types[1]))
+    
 
     # Convert lists to padded arrays
     # Root jumps
@@ -537,6 +582,12 @@ def jax_build_static_maps_vmap(ips, ode_state_space, vertex_state_space, state_t
         for i, nt in enumerate(root_neighbor_edge_types_list):
             root_neighbor_edge_types_padded[i, :len(nt)] = [edge_type_to_index[s] for s in nt]
 
+    root_neighbor_edge_states_padded = np.full((num_root_jumps, max_neighbors), -1, dtype=np.int32)
+    if ips.edge_state_space is not None:
+        edge_state_to_index = {es: i for i, es in enumerate(ips.edge_state_space)}
+        for i, es in enumerate(root_neighbor_edge_states_list):
+            root_neighbor_edge_states_padded[i, :len(es)] = [edge_state_to_index[s] for s in es]
+
     # Gamma terms
     num_gamma_terms = len(gamma_src_list)
 
@@ -553,6 +604,11 @@ def jax_build_static_maps_vmap(ips, ode_state_space, vertex_state_space, state_t
     if ips.edge_type_space is not None:
         for i, nt in enumerate(gamma_neighbor_edge_types_list):
             gamma_neighbor_edge_types_padded[i, :len(nt)] = [edge_type_to_index[s] for s in nt]
+    
+    gamma_neighbor_edge_states_padded = np.full((num_gamma_terms, max_neighbors), -1, dtype=np.int32)
+    if ips.edge_state_space is not None:
+        for i, es in enumerate(gamma_neighbor_edge_states_list):
+            gamma_neighbor_edge_states_padded[i, :len(es)] = [edge_state_to_index[s] for s in es]
 
     # Pad gamma dependency indices and weights
     max_terms_per_jump = max((len(x) for x in gamma_dependency_indices), default=0)
@@ -574,6 +630,15 @@ def jax_build_static_maps_vmap(ips, ode_state_space, vertex_state_space, state_t
         gamma_indices_padded[i, :n_terms] = gamma_dependency_indices[i]
         gamma_weights_padded[i, :n_terms] = gamma_weights[i]
 
+    # Edge jump structures
+    num_edge_jumps = len(edge_jump_indices)
+    edge_src = np.array([edge_state_to_index[s] for s in edge_src_list], dtype=np.int32)
+    edge_tgt = np.array([edge_state_to_index[s] for s in edge_tgt_list], dtype=np.int32)
+    edge_neighbor_vertex_states_padded = np.full((num_edge_jumps, 2), -1, dtype=np.int32)
+    if ips.edge_state_space is not None:
+        for i, ns in enumerate(edge_neighbor_vertex_states_list):
+            edge_neighbor_vertex_states_padded[i, :len(ns)] = [state_to_index[s] for s in ns]
+
     # Bundle everything
     static_args = {
         # Sparse matrix structure
@@ -587,6 +652,7 @@ def jax_build_static_maps_vmap(ips, ode_state_space, vertex_state_space, state_t
         "neighbors": jnp.array(neighbor_states_padded, dtype=jnp.int32),
         "neighbors_vertex_types": jnp.array(root_neighbor_vertex_types_padded, dtype=jnp.int32),
         "neighbors_edge_types": jnp.array(root_neighbor_edge_types_padded, dtype=jnp.int32),
+        "neighbors_edge_states": jnp.array(root_neighbor_edge_states_padded, dtype=jnp.int32),
 
         # Neighbor jump 
         "neigh_idx_map": jnp.array(neighbor_jump_indices, dtype=jnp.int32),
@@ -599,6 +665,13 @@ def jax_build_static_maps_vmap(ips, ode_state_space, vertex_state_space, state_t
         "gamma_neighbors": jnp.array(gamma_neighbor_states_padded, dtype=jnp.int32),
         "gamma_neighbors_vertex_types": jnp.array(gamma_neighbor_vertex_types_padded, dtype=jnp.int32),
         "gamma_neighbors_edge_types": jnp.array(gamma_neighbor_edge_types_padded, dtype=jnp.int32),
+        "gamma_neighbors_edge_states": jnp.array(gamma_neighbor_edge_states_padded, dtype=jnp.int32),
+
+        # Edge jump structures
+        "edge_idx_map": jnp.array(edge_jump_indices, dtype=jnp.int32),
+        "edge_src": edge_src,
+        "edge_tgt": edge_tgt,
+        "edge_neighbor_vertex_states": jnp.array(edge_neighbor_vertex_states_padded, dtype=jnp.int32),
 
         # Mapping from neighbor jumps to gamma terms
         "gamma_gather_map": jnp.array(gamma_gather_map, dtype=jnp.int32),
