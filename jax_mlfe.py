@@ -721,8 +721,10 @@ def jax_build_static_maps_vmap_dynamic_weights(ips, ode_state_space, vertex_stat
 
                         # Get gamma logic
                         needed_terms = gamma_logic_func(
-                            ips, src[changed_index], tgt[changed_index],
-                            src[changed_index], src[0],
+                            ips, src[changed_index], 
+                            tgt[changed_index],
+                            src[changed_index], 
+                            src[0],
                             root_one_state = neighbor_types[changed_index-1]
                         )
 
@@ -752,22 +754,22 @@ def jax_build_static_maps_vmap_dynamic_weights(ips, ode_state_space, vertex_stat
             changed_indices = [i for i in range(len(src)) if src[i] != tgt[i]]
             if changed_indices[0] != 0:
                 continue
+            else:
+                # TODO: this can be optimized as edges are permutation invariant
+                changed_index = changed_indices[1]
+                for vertex_neighborhood_types in vertex_state_space:
+                    transition_idx += 1
 
-            # TODO: this can be optimized as edges are permutation invariant
-            changed_index = changed_indices[1]
-            for vertex_neighborhood_types in vertex_state_space:
-                transition_idx += 1
+                    row_idx = ode_state_to_index[(vertex_neighborhood_types, src)]
+                    col_idx = ode_state_to_index[(vertex_neighborhood_types, tgt)]
 
-                row_idx = ode_state_to_index[(vertex_neighborhood_types, src)]
-                col_idx = ode_state_to_index[(vertex_neighborhood_types, tgt)]
+                    rows.append(row_idx)
+                    cols.append(col_idx)
+                    edge_jump_indices.append(transition_idx)
 
-                rows.append(row_idx)
-                cols.append(col_idx)
-                edge_jump_indices.append(transition_idx)
-
-                edge_src_list.append(src[changed_index])
-                edge_tgt_list.append(tgt[changed_index])
-                edge_neighbor_vertex_states_list.append((vertex_neighborhood_types[0], vertex_neighborhood_types[1]))
+                    edge_src_list.append(src[changed_index])
+                    edge_tgt_list.append(tgt[changed_index])
+                    edge_neighbor_vertex_states_list.append((vertex_neighborhood_types[0], vertex_neighborhood_types[1]))
 
 
     # Convert lists to padded arrays
@@ -807,12 +809,6 @@ def jax_build_static_maps_vmap_dynamic_weights(ips, ode_state_space, vertex_stat
     max_terms_per_jump = max((len(x) for x in gamma_gather_indices_list), default=0)
     gamma_gather_map = np.zeros((num_jumps, max_terms_per_jump), dtype=np.int32)
 
-    # pad edge jumps
-    num_edge_jumps = len(edge_jump_indices)
-    edge_neighbor_vertex_states_padded = np.full((num_edge_jumps, 2), -1, dtype=np.int32)
-    for i, ns in enumerate(edge_neighbor_vertex_states_list):
-        edge_neighbor_vertex_states_padded[i, :len(ns)] = [state_to_index[s] for s in ns]
-
     for i, inds in enumerate(gamma_gather_indices_list):
         gamma_gather_map[i, :len(inds)] = inds
 
@@ -820,6 +816,12 @@ def jax_build_static_maps_vmap_dynamic_weights(ips, ode_state_space, vertex_stat
         n_terms = len(gamma_dependency_indices[i])
         gamma_indices_padded[i, :n_terms] = gamma_dependency_indices[i]
         gamma_weights_padded[i, :n_terms] = gamma_weights[i]
+    
+    # pad edge jumps
+    num_edge_jumps = len(edge_jump_indices)
+    edge_neighbor_vertex_states_padded = np.full((num_edge_jumps, 2), -1, dtype=np.int32)
+    for i, ns in enumerate(edge_neighbor_vertex_states_list):
+        edge_neighbor_vertex_states_padded[i, :len(ns)] = [state_to_index[s] for s in ns]
 
     # Bundle everything
     static_args = {

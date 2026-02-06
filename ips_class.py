@@ -228,8 +228,8 @@ class ParticleSystem:
 
         # TODO: there is no dependency on vertex or edge types (only one gadget)        
         return self.edge_rate(
-            source,
-            target,
+            source_state,
+            target_state,
             vertex_states,
             meas
         )

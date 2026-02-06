@@ -58,6 +58,7 @@ def simulate_jump_process(
 
     # Initialize results list
     jumps = []
+    edge_jumps = []
 
     while current_time < max_time:
         # Calculate rates for all possible transitions
@@ -92,11 +93,12 @@ def simulate_jump_process(
                 edge = tuple(sorted(edge))
                 
                 for target_state in ips.edge_state_space:
-                    transition_rate = ips.edge_rate(
+                    transition_rate = ips.edge_sim_rate(
                         edge,
                         current_edge_state[edge],
                         target_state,
                         current_vertex_state,
+                        meas=meas
                     )
 
                     if transition_rate > 0:
