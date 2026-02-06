@@ -93,33 +93,26 @@ def make_rate_caller(rate_func_vectorized, params, has_vertex_types, has_edge_ty
         Returns:
             (N,) array of rates
         """
-        # Mask out padded neighbors (-1 values)
-        # This ensures padded values don't affect sums/counts
-        valid_mask = neighbors >= 0
-        masked_neighbors = jnp.where(valid_mask, neighbors, 0)
-
         # Call user's rate function
         if has_vertex_types:
-            masked_vertex_types = jnp.where(valid_mask, vertex_types, 0)
             rates = jax.vmap(
                 lambda src, tgt, nei, vt, p, t: rate_func_vectorized(
                     src, tgt, nei, vertex_types=vt, params=params, meas=p, t=t
                 ),
                 in_axes=(0, 0, 0, 0, None, None)
-            )(src, tgt, masked_neighbors, masked_vertex_types, meas, t)
+            )(src, tgt, neighbors, vertex_types, meas, t)
         elif has_edge_types:
-            masked_edge_types = jnp.where(valid_mask, edge_types, 0)
             rates = jax.vmap(
                 lambda src, tgt, nei, et, p, t: rate_func_vectorized(
                     src, tgt, nei, edge_types=et, params=params, meas=p, t=t
                 ),
                 in_axes=(0, 0, 0, 0, None, None)
-            )(src, tgt, masked_neighbors, masked_edge_types, meas, t)
+            )(src, tgt, neighbors, edge_types, meas, t)
         else:
             rates = jax.vmap(
                 lambda src, tgt, nei, p, t: rate_func_vectorized(src, tgt, nei, params=params, meas=p, t=t),
                 in_axes=(0, 0, 0, None, None)
-            )(src, tgt, masked_neighbors, meas, t)
+            )(src, tgt, neighbors, meas, t)
 
         return rates
 
@@ -253,7 +246,7 @@ def jax_build_static_maps(ips, ode_state_space, vertex_state_space, ode_state_to
                                                         src[changed_index], src[0],
                                                         root_type=neighbor_types[changed_index] if ips.vertex_type_space is not None else None,
                                                         one_type=neighbor_types[0] if ips.vertex_type_space is not None else None,
-                                                        root_one_type=neighbor_types[0] if ips.edge_type_space is not None else None)
+                                                        root_one_type=neighbor_types[changed_index-1] if ips.edge_type_space is not None else None)
 
                         term_indices = [ode_state_to_index[s] for w, r, s in needed_terms]
                         term_rates = [r for w, r, s in needed_terms]
@@ -318,9 +311,9 @@ def jax_gamma_index_builder_vmap(ips, src, tgt, root_state, one_state, root_type
             [
                 (1 + len(remaining_state)),  # weight
                 {  # rate_args (metadata for computing rate later)
-                    'src': one_state,
+                    'src': src,
                     'tgt': tgt,
-                    'neighbor_states': remaining_state,
+                    'neighbor_states': (one_state,) + remaining_state,
                     'neighbors_vertex_type': None,
                     'neighbors_edge_type': None,
                 },
@@ -335,9 +328,9 @@ def jax_gamma_index_builder_vmap(ips, src, tgt, root_state, one_state, root_type
             [
                 (1 + len(remaining_state)),
                 {
-                    'src': one_state,
+                    'src': src,
                     'tgt': tgt,
-                    'neighbor_states': remaining_state,
+                    'neighbor_states': (one_state,) + remaining_state,
                     'neighbors_vertex_type': (root_type, one_type) + remaining_type,
                     'neighbors_edge_type': None,
                 },
@@ -353,9 +346,9 @@ def jax_gamma_index_builder_vmap(ips, src, tgt, root_state, one_state, root_type
             [
                 (1 + len(remaining_state)),
                 {
-                    'src': one_state,
+                    'src': src,
                     'tgt': tgt,
-                    'neighbor_states': remaining_state,
+                    'neighbor_states': (one_state,) + remaining_state,
                     'neighbors_vertex_type': None,
                     'neighbors_edge_type': (root_one_type,) + remaining_type,
                 },
@@ -464,7 +457,7 @@ def jax_build_static_maps_vmap(ips, ode_state_space, vertex_state_space, state_t
                             src[changed_index], src[0],
                             root_type=neighbor_types[changed_index] if ips.vertex_type_space is not None else None,
                             one_type=neighbor_types[0] if ips.vertex_type_space is not None else None,
-                            root_one_type=neighbor_types[0] if ips.edge_type_space is not None else None
+                            root_one_type=neighbor_types[changed_index-1] if ips.edge_type_space is not None else None
                         )
 
                         # Extract indices and weights
