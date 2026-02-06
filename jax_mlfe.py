@@ -509,12 +509,8 @@ def jax_build_static_maps_vmap(ips, ode_state_space, vertex_state_space, state_t
                             src[changed_index], src[0],
                             root_type=neighbor_types[changed_index] if ips.vertex_type_space is not None else None,
                             one_type=neighbor_types[0] if ips.vertex_type_space is not None else None,
-<<<<<<< HEAD
-                            root_one_type=neighbor_types[changed_index-1] if ips.edge_type_space is not None else None
-=======
-                            root_one_type=neighbor_types[0] if ips.edge_type_space is not None else None,
-                            root_one_state=neighbor_types[0] if ips.edge_state_space is not None else None
->>>>>>> 3fbbac4... bug, checking out
+                            root_one_type=neighbor_types[changed_index-1] if ips.edge_type_space is not None else None,
+                            root_one_state=neighbor_types[changed_index-1] if ips.edge_state_space is not None else None
                         )
 
                         # Extract indices and weights
