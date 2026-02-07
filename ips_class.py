@@ -55,6 +55,7 @@ class ParticleSystem:
              neighbors_vertex_type: list[any] = None,
              neighbors_edge_type: list[any] = None,
              meas: dict[tuple[any], float] = None,
+             t: float = None
              ) -> float:
         """
         Compute the rate of transition from source_state to target_state for a given node.
@@ -131,6 +132,7 @@ class ParticleSystem:
             source_state: any,
             target_state: any,
             current_config: dict[int, any],
+            t: float = None
     ):
         # get neighbors of the source state
         neighbors_state = tuple(
@@ -176,6 +178,7 @@ class ParticleSystem:
             neighbors_vertex_type=neighbors_vertex_type,
             neighbors_edge_type=neighbors_edge_type,
             meas=global_empirical_measure,
+            t=t
         )
 
     def get_state_to_index_map(self):
