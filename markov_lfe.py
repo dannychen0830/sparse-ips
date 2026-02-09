@@ -129,15 +129,15 @@ def jax_mlfe_vector_field_vmap(t, p, args):
         t
     )
 
-    # Edge rate
-    edge_rate_caller = args["edge_rate_caller"]
-    edge_rates = edge_rate_caller(
-        args["edge_src"],
-        args["edge_tgt"],
-        args["edge_neighbor_vertex_states"],
-        p,
-        t
-    )
+    # # Edge rate
+    # edge_rate_caller = args["edge_rate_caller"]
+    # edge_rates = edge_rate_caller(
+    #     args["edge_src"],
+    #     args["edge_tgt"],
+    #     args["edge_neighbor_vertex_states"],
+    #     p,
+    #     t
+    # )
 
     # -------------------------------------------------
     # 3. Assemble gamma rates for each neighbor jump
