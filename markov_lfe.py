@@ -129,15 +129,15 @@ def jax_mlfe_vector_field_vmap(t, p, args):
         t
     )
 
-    # # Edge rate
-    # edge_rate_caller = args["edge_rate_caller"]
-    # edge_rates = edge_rate_caller(
-    #     args["edge_src"],
-    #     args["edge_tgt"],
-    #     args["edge_neighbor_vertex_states"],
-    #     p,
-    #     t
-    # )
+    # Edge rate
+    edge_rate_caller = args["edge_rate_caller"]
+    edge_rates = edge_rate_caller(
+        args["edge_src"],
+        args["edge_tgt"],
+        args["edge_neighbor_vertex_states"],
+        p,
+        t
+    )
 
     # -------------------------------------------------
     # 3. Assemble gamma rates for each neighbor jump
@@ -165,7 +165,7 @@ def jax_mlfe_vector_field_vmap(t, p, args):
     # Scatter rates into full array
     all_rates = all_rates.at[args["neigh_idx_map"]].set(neigh_rates)
     all_rates = all_rates.at[args["root_idx_map"]].set(root_rates)
-    # all_rates = all_rates.at[args["edge_idx_map"]].set(edge_rates)
+    all_rates = all_rates.at[args["edge_idx_map"]].set(edge_rates)
 
     # Build sparse rate matrix Q
     sparse_indices = jnp.stack([args["rows"], args["cols"]], axis=1)

@@ -108,12 +108,18 @@ def make_rate_caller(rate_func_vectorized, params, has_vertex_types, has_edge_ty
                 ),
                 in_axes=(0, 0, 0, 0, None, None)
             )(src, tgt, neighbors, edge_types, meas, t)
+        elif has_edge_states:
+            rates = jax.vmap(
+                    lambda src, tgt, nei, es, p, t: rate_func_vectorized(
+                        src, tgt, nei, edge_states=es, params=params, meas=p, t=t
+                    ),
+                    in_axes=(0, 0, 0, 0, None, None)
+                )(src, tgt, neighbors, edge_states, meas, t)
         else:
             rates = jax.vmap(
                 lambda src, tgt, nei, p, t: rate_func_vectorized(src, tgt, nei, params=params, meas=p, t=t),
                 in_axes=(0, 0, 0, None, None)
             )(src, tgt, neighbors, meas, t)
-
         return rates
 
     return call_rates
