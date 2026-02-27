@@ -559,7 +559,7 @@ def jax_build_static_maps_vmap(ips, ode_state_space, vertex_state_space, state_t
 
                     edge_src_list.append(src[changed_index])
                     edge_tgt_list.append(tgt[changed_index])
-                    edge_neighbor_vertex_states_list.append((vertex_neighborhood_types[0], vertex_neighborhood_types[1]))
+                    edge_neighbor_vertex_states_list.append((vertex_neighborhood_types[0], vertex_neighborhood_types[changed_index+1]))
     
 
     # Convert lists to padded arrays
