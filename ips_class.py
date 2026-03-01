@@ -16,7 +16,7 @@ class ParticleSystem:
             vertex_type: dict[int, any] = None,
             edge_type_space: list[any] = None,
             edge_type: dict[tuple[int, int], any] = None,
-            edge_state: list[any] = None,
+            edge_state_space: list[any] = None,
             edge_rate: callable = None,
             global_interaction: bool = False,
     ):
@@ -41,7 +41,7 @@ class ParticleSystem:
         self.vertex_type = vertex_type
         self.edge_type_space = edge_type_space
         self.edge_type = edge_type
-        self.edge_state = edge_state
+        self.edge_state_space = edge_state_space
         self.edge_rate = edge_rate
         self.global_interaction = global_interaction
 
@@ -126,6 +126,32 @@ class ParticleSystem:
 
         return self
 
+    def get_neighborhood(self, node: int, current_config: dict[int, any]):
+        """
+        Get the neighborhood of a node in the current configuration.
+        """
+        return (current_config[node],) + tuple(
+            current_config[neighbor] for neighbor in self.graph.neighbors(node)
+        )
+
+    def compute_global_empirical_measure(self, current_config: dict[int, any]):
+        """
+        Compute the global empirical measure of the current configuration.
+        """
+        if not self.global_interaction:
+            return None
+
+        global_empirical_measure = {
+            neighborhood: 0 for neighborhood in self.neighborhood_state_space
+        }
+        for vertex in range(self.num_particles):
+            neighborhood = self.get_neighborhood(vertex, current_config)
+            try:
+                global_empirical_measure[neighborhood] += 1 / self.num_particles
+            except KeyError:
+                pass
+        return global_empirical_measure
+
     def sim_rate(
             self,
             node: int,
@@ -133,6 +159,8 @@ class ParticleSystem:
             target_state: any,
             current_config: dict[int, any],
             t: float = None
+            meas: dict[tuple[any], float] = None,
+            current_edge_state: dict[tuple[int, int], any] = None,
     ):
         # get neighbors of the source state
         neighbors_state = tuple(
@@ -154,22 +182,22 @@ class ParticleSystem:
                 for neighbor in self.graph.neighbors(node)
             ]
         )
+
+        # get neighbors edge state
+        neighbors_edge_state = (
+            None
+            if self.edge_state_space is None
+            else [
+                current_edge_state[tuple(sorted((node, neighbor)))]
+                for neighbor in self.graph.neighbors(node)
+            ]
+        )
+
         # get global neighborhood empirical measure in the form of dictionary
-        if self.global_interaction:
-            global_empirical_measure = {
-                neighborhood: 0 for neighborhood in self.neighborhood_state_space
-            }
-            for vertex in range(self.num_particles):
-                neighborhood = (current_config[vertex],) + tuple(
-                    current_config[neighbor]
-                    for neighbor in self.graph.neighbors(vertex)
-                )
-                try:
-                    global_empirical_measure[neighborhood] += 1 / self.num_particles
-                except KeyError:
-                    pass
+        if self.global_interaction and meas is None:
+            global_empirical_measure = self.compute_global_empirical_measure(current_config)
         else:
-            global_empirical_measure = None
+            global_empirical_measure = meas
 
         return self.rate(
             source_state,
@@ -177,9 +205,38 @@ class ParticleSystem:
             neighbors_state,
             neighbors_vertex_type=neighbors_vertex_type,
             neighbors_edge_type=neighbors_edge_type,
+            neighbors_edge_state=neighbors_edge_state,
             meas=global_empirical_measure,
             t=t
         )
+
+    def edge_sim_rate(
+        self,
+        edge: tuple[int, int],
+        source_state: any,
+        target_state: any,
+        current_config: dict[int, any],
+        meas: dict[tuple[any], float] = None,
+    ):
+        if self.edge_rate is None:
+            raise ValueError("Edge rate function is not defined.")
+        
+        # sort the edge 
+        edge = tuple(sorted(edge))
+
+        # parse the vertex states connected by the edge
+        vertex_states = tuple(
+            [current_config[node] for node in edge]
+        )
+
+        # TODO: there is no dependency on vertex or edge types (only one gadget)        
+        return self.edge_rate(
+            source_state,
+            target_state,
+            vertex_states,
+            meas
+        )
+        
 
     def get_state_to_index_map(self):
         """
@@ -187,7 +244,6 @@ class ParticleSystem:
         :return: A dictionary mapping each state to its  index.
         """
         return {state: i for i, state in enumerate(self.state_space)}
-
 
 class MeanFieldParticleSystem:
     def __init__(

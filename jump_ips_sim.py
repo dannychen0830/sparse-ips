@@ -9,6 +9,7 @@ def simulate_jump_process(
     max_time: float,
     seed: int = None,
     verbose: bool = False,
+    edge_initial_conditions: dict[tuple[int,int],any] = None,
 ) -> list[tuple[int, float, tuple[any, any]]]:
     """
     Simulate interacting particles on a graph as a continuous-time Markov chain.
@@ -48,25 +49,35 @@ def simulate_jump_process(
         start_time = np.datetime64("now")
 
     # Initialize current state and simulation time
-    current_state = initial_conditions.copy()
+    current_vertex_state = initial_conditions.copy()
+    current_edge_state = edge_initial_conditions.copy() if edge_initial_conditions is not None else None
     current_time = 0.0
+
+    # Initialize global empirical measure if needed
+    meas = ips.compute_global_empirical_measure(current_vertex_state) if ips.global_interaction else None
 
     # Initialize results list
     jumps = []
+    edge_jumps = []
 
     while current_time < max_time:
         # Calculate rates for all possible transitions
         possible_transitions = []
         rates = []
-
+ 
         for node in ips.graph.nodes():
-            current_node_state = current_state[node]
+            current_node_state = current_vertex_state[node]
 
             # Consider all possible target states for this node
             for target_state in ips.state_space:
                 if target_state != current_node_state:
                     transition_rate = ips.sim_rate(
-                        node, current_node_state, target_state, current_state, current_time
+                        node,
+                        current_node_state,
+                        target_state,
+                        current_vertex_state,
+                        meas=meas,
+                        current_edge_state=current_edge_state,
                     )
 
                     if transition_rate > 0:
@@ -75,6 +86,28 @@ def simulate_jump_process(
                         )
                         rates.append(transition_rate)
 
+        # if available, add the edge weight dynamics
+        if ips.edge_rate is not None:
+            for edge in ips.graph.edges():
+                # sort edge 
+                edge = tuple(sorted(edge))
+                
+                for target_state in ips.edge_state_space:
+                    transition_rate = ips.edge_sim_rate(
+                        edge,
+                        current_edge_state[edge],
+                        target_state,
+                        current_vertex_state,
+                        meas=meas
+                    )
+
+                    if transition_rate > 0:
+                        possible_transitions.append(
+                            (edge, current_edge_state[edge], target_state)
+                        )
+                        rates.append(transition_rate)
+
+    
         # If no transitions are possible, we're done
         if not rates:
             break
@@ -99,13 +132,35 @@ def simulate_jump_process(
         transition_index = np.random.choice(
             len(possible_transitions), p=np.array(rates) / np.sum(rates)
         )
-        node, source_state, target_state = possible_transitions[transition_index]
+
+        entity, source_state, target_state = possible_transitions[transition_index]
+
+        # The state change of 'node' affects the neighborhood of 'node' and all its neighbors
+        if meas is not None:
+            affected_nodes = [node] + list(ips.graph.neighbors(node))
+            
+            # Remove contributions from old state
+            for v in affected_nodes:
+                old_nb = ips.get_neighborhood(v, current_vertex_state)
+                meas[old_nb] = meas.get(old_nb, 0.0) - 1.0 / ips.num_particles
+                if meas[old_nb] <= 1e-12:
+                    del meas[old_nb]
 
         # Update state
-        current_state[node] = target_state
+        if isinstance(entity, tuple):
+            edge = tuple(sorted(entity))
+            current_edge_state[edge] = target_state
+            edge_jumps.append((edge, current_time, (source_state, target_state)))
+        else:
+            node = entity
+            current_vertex_state[node] = target_state
+            jumps.append((node, current_time, (source_state, target_state)))
 
-        # Record jump
-        jumps.append((node, current_time, (source_state, target_state)))
+        # Add contributions from new state
+        if meas is not None:
+            for v in affected_nodes:
+                new_nb = ips.get_neighborhood(v, current_vertex_state)
+                meas[new_nb] = meas.get(new_nb, 0.0) + 1.0 / ips.num_particles
 
     if verbose:
         print(f'completed simulation in {np.datetime64("now") - start_time} seconds.')

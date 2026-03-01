@@ -107,9 +107,12 @@ def jax_mlfe_vector_field_vmap(t, p, args):
         args["neighbors"],
         args["neighbors_vertex_types"],
         args["neighbors_edge_types"],
+        args["neighbors_edge_states"],
         p,
         t
     )
+
+    
 
     # -------------------------------------------------
     # 2. Compute all gamma term rates (vectorized)
@@ -121,6 +124,17 @@ def jax_mlfe_vector_field_vmap(t, p, args):
         args["gamma_neighbors"],
         args["gamma_neighbors_vertex_types"],
         args["gamma_neighbors_edge_types"],
+        args["gamma_neighbors_edge_states"],
+        p,
+        t
+    )
+
+    # Edge rate
+    edge_rate_caller = args["edge_rate_caller"]
+    edge_rates = edge_rate_caller(
+        args["edge_src"],
+        args["edge_tgt"],
+        args["edge_neighbor_vertex_states"],
         p,
         t
     )
@@ -151,6 +165,7 @@ def jax_mlfe_vector_field_vmap(t, p, args):
     # Scatter rates into full array
     all_rates = all_rates.at[args["neigh_idx_map"]].set(neigh_rates)
     all_rates = all_rates.at[args["root_idx_map"]].set(root_rates)
+    all_rates = all_rates.at[args["edge_idx_map"]].set(edge_rates)
 
     # Build sparse rate matrix Q
     sparse_indices = jnp.stack([args["rows"], args["cols"]], axis=1)
@@ -181,6 +196,7 @@ def simulate_markov_lfe(
         max_time: float,
         vertex_type_init: dict[any, float] = None,
         edge_type_init: dict[any, float] = None,
+        edge_state_init: dict[any, float] = None,
         num_grid_points: int = 100,
         solver_type: str = 'explicit',
         step_control: str = 'constant',
@@ -194,22 +210,28 @@ def simulate_markov_lfe(
     deg_dist = ips.deg_dist
     deg_supp = ips.deg_supp
 
-    if ips.vertex_type_space is None and ips.edge_type_space is None:
+    if ips.vertex_type_space is None and ips.edge_type_space is None and ips.edge_state_space is None:
         vertex_state_space = [(root,) + children for k in deg_supp for (root, children) in
                               product(ips.state_space, product(ips.state_space, repeat=k))]
         ode_state_space = vertex_state_space
-    elif ips.vertex_type_space is not None and ips.edge_type_space is None:
+    elif ips.vertex_type_space is not None and ips.edge_type_space is None and ips.edge_state_space is None:
         vertex_state_space = [(root,) + children for k in deg_supp for (root, children) in
                               product(ips.state_space, product(ips.state_space, repeat=k))]
         vertex_type_space = [(root,) + children for k in deg_supp for (root, children) in
                              product(ips.vertex_type_space, product(ips.vertex_type_space, repeat=k))]
         ode_state_space = [(state, type) for state in vertex_state_space for type in vertex_type_space if
                            len(state) == len(type)]
-    elif ips.vertex_type_space is None and ips.edge_type_space is not None:
+    elif ips.vertex_type_space is None and ips.edge_type_space is not None and ips.edge_state_space is None:
         vertex_state_space = [(root,) + children for k in deg_supp for (root, children) in
                               product(ips.state_space, product(ips.state_space, repeat=k))]
         edge_type_space = [root_children for k in deg_supp for root_children in product(ips.edge_type_space, repeat=k)]
         ode_state_space = [(state, type) for state in vertex_state_space for type in edge_type_space if
+                           len(state) == len(type) + 1]
+    elif ips.vertex_type_space is None and ips.edge_type_space is None and ips.edge_state_space is not None:
+        vertex_state_space = [(root,) + children for k in deg_supp for (root, children) in
+                              product(ips.state_space, product(ips.state_space, repeat=k))]
+        edge_state_space = [root_children for k in deg_supp for root_children in product(ips.edge_state_space, repeat=k)]
+        ode_state_space = [(state, type) for state in vertex_state_space for type in edge_state_space if
                            len(state) == len(type) + 1]
     else:
         raise NotImplementedError(
@@ -244,26 +266,42 @@ def simulate_markov_lfe(
             static_args, sparse_indices = jax_build_static_maps_vmap(
                 ips,
                 ode_state_space,
-                vertex_state_space,
+                vertex_state_space, 
                 ips.get_state_to_index_map(),
                 ode_state_space_to_index,
                 jax_gamma_index_builder_vmap,
                 vertex_type_space=vertex_type_space if ips.vertex_type_space is not None else None,
-                edge_type_space=edge_type_space if ips.edge_type_space is not None else None
+                edge_type_space=edge_type_space if ips.edge_type_space is not None else None,
+                edge_state_space=edge_state_space if ips.edge_state_space is not None else None
             )
 
-        # Create rate caller
-        if rate_caller is None:
-            rate_caller = make_rate_caller(ips.rate_vectorized,
-                                           rate_params,
-                                           ips.vertex_type_space is not None,
-                                           ips.edge_type_space is not None)
+                # Create rate caller
+            if rate_caller is None:
+                rate_caller = make_rate_caller(ips.rate_vectorized,
+                                            rate_params,
+                                            ips.vertex_type_space is not None,
+                                            ips.edge_type_space is not None,
+                                            ips.edge_state_space is not None)
+       
         static_args["rate_caller"] = rate_caller
+
+        # Create rate caller for edge rates 
+        if ips.edge_state_space is not None:
+            if not hasattr(ips, 'edge_rate_vectorized'):
+                raise ValueError(
+                    "JAX backend requires 'edge_rate_vectorized' method. "
+                    "This method must use JAX-compatible operations (jnp.where, jax.vmap, etc.) "
+                    "and accept vectorized inputs. See documentation for examples."
+                )
+            edge_rate_caller = make_edge_rate_caller(ips.edge_rate_vectorized, rate_params)
+        else:
+            edge_rate_caller = lambda *args: None
+        static_args["edge_rate_caller"] = edge_rate_caller
 
         # define vector field
         term = diffrax.ODETerm(jax_mlfe_vector_field_vmap)
     else:
-        if ips.global_interaction:
+        if ips.global_interaction or ips.edge_state_space is not None:
             raise ValueError("Backend does not support global interactions in non-vectorized mode.")
         # Build static structure
         static_args, _ = jax_build_static_maps(ips, ode_state_space, vertex_state_space, ode_state_space_to_index,
@@ -275,10 +313,10 @@ def simulate_markov_lfe(
 
     # Set up ODE solver
     # Initialize
-    if ips.vertex_type_space is None and ips.edge_type_space is None:
+    if ips.vertex_type_space is None and ips.edge_type_space is None and ips.edge_state_space is None:
         ode_init = [initial_conditions[state[0]] * deg_dist[len(state) - 1] * np.prod(
             [initial_conditions[child] for child in state[1:]]) for state in ode_state_space]
-    elif ips.vertex_type_space is not None and ips.edge_type_space is None:
+    elif ips.vertex_type_space is not None and ips.edge_type_space is None and ips.edge_state_space is None:
         ode_init = [
             initial_conditions[state[0]]
             * deg_dist[len(state) - 1]
@@ -286,12 +324,20 @@ def simulate_markov_lfe(
             * np.prod([vertex_type_init[t] for t in type])
             for (state, type) in ode_state_space
         ]
-    elif ips.vertex_type_space is None and ips.edge_type_space is not None:
+    elif ips.vertex_type_space is None and ips.edge_type_space is not None and ips.edge_state_space is None:
         ode_init = [
             initial_conditions[state[0]]
             * deg_dist[len(state) - 1]
             * np.prod([initial_conditions[child] for child in state[1:]])
             * np.prod([edge_type_init[t] for t in type])
+            for (state, type) in ode_state_space
+        ]
+    elif ips.vertex_type_space is None and ips.edge_type_space is None and ips.edge_state_space is not None:
+        ode_init = [
+            initial_conditions[state[0]]
+            * deg_dist[len(state) - 1]
+            * np.prod([initial_conditions[child] for child in state[1:]])
+            * np.prod([edge_state_init[t] for t in type])
             for (state, type) in ode_state_space
         ]
     else:
@@ -340,87 +386,88 @@ def simulate_markov_lfe(
     return sol.ts, sol.ys.transpose(), index_to_ode_state_space
 
 
-def simulate_markov_lfe_mf(
-        ips: ParticleSystem,
-        initial_conditions: dict[any, float],
-        max_time: float,
-        num_particles: int = 500,
-        seed: int = 42,
-        num_grid_points: int = 100,
-        gamma: callable = None
-) -> tuple[np.ndarray, np.ndarray, dict[int, tuple[any]]]:
-    # model parameters
-    deg_dist = ips.get_empirical_degree_distribution()
-    deg_supp = [i for (i, p) in deg_dist.items() if p > 0]
+# Deprecated
+# def simulate_markov_lfe_mf(
+#         ips: ParticleSystem,
+#         initial_conditions: dict[any, float],
+#         max_time: float,
+#         num_particles: int = 500,
+#         seed: int = 42,
+#         num_grid_points: int = 100,
+#         gamma: callable = None
+# ) -> tuple[np.ndarray, np.ndarray, dict[int, tuple[any]]]:
+#     # model parameters
+#     deg_dist = ips.get_empirical_degree_distribution()
+#     deg_supp = [i for (i, p) in deg_dist.items() if p > 0]
 
-    # track all possible root-children marginals
-    vertex_state_space = [(root,) + children for k in deg_supp for (root, children) in
-                          product(ips.state_space, product(ips.state_space, repeat=k))]
-    ode_state_space = [(root,) + children for k in deg_supp for (root, children) in
-                       product(ips.state_space, product(ips.state_space, repeat=k))]
+#     # track all possible root-children marginals
+#     vertex_state_space = [(root,) + children for k in deg_supp for (root, children) in
+#                           product(ips.state_space, product(ips.state_space, repeat=k))]
+#     ode_state_space = [(root,) + children for k in deg_supp for (root, children) in
+#                        product(ips.state_space, product(ips.state_space, repeat=k))]
 
-    index_to_ode_state_space = {i: state for i, state in enumerate(ode_state_space)}
-    ode_state_space_to_index = {state: i for i, state in index_to_ode_state_space.items()}
+#     index_to_ode_state_space = {i: state for i, state in enumerate(ode_state_space)}
+#     ode_state_space_to_index = {state: i for i, state in index_to_ode_state_space.items()}
 
-    if gamma is None:
-        # define the Markov local-field jump rate
-        def gamma(src: tuple, tgt: tuple, root_state, one_state, marginal_prob: dict[tuple, float]) -> float:
-            numerator = sum(
-                (2 + len(remaining_state)) *
-                marginal_prob.get((root_state, one_state) + remaining_state, 0) * ips.rate(src, tgt, (
-                    one_state,) + remaining_state)
-                for k in deg_supp for remaining_state in product(ips.state_space, repeat=k - 1)
-            )
-            denominator = sum(
-                (2 + len(remaining_state)) * marginal_prob.get((root_state, one_state) + remaining_state, 0)
-                for k in deg_supp for remaining_state in product(ips.state_space, repeat=k - 1)
-            )
-            return numerator / denominator if denominator > 0 else 0
+#     if gamma is None:
+#         # define the Markov local-field jump rate
+#         def gamma(src: tuple, tgt: tuple, root_state, one_state, marginal_prob: dict[tuple, float]) -> float:
+#             numerator = sum(
+#                 (2 + len(remaining_state)) *
+#                 marginal_prob.get((root_state, one_state) + remaining_state, 0) * ips.rate(src, tgt, (
+#                     one_state,) + remaining_state)
+#                 for k in deg_supp for remaining_state in product(ips.state_space, repeat=k - 1)
+#             )
+#             denominator = sum(
+#                 (2 + len(remaining_state)) * marginal_prob.get((root_state, one_state) + remaining_state, 0)
+#                 for k in deg_supp for remaining_state in product(ips.state_space, repeat=k - 1)
+#             )
+#             return numerator / denominator if denominator > 0 else 0
 
-    class MLFEParticleSystem(MeanFieldParticleSystem):
-        def __init__(self, ode_state_space: list[any], num_particles: int, name: str = None):
-            super().__init__(state_space=ode_state_space, num_particles=num_particles, name=name)
+#     class MLFEParticleSystem(MeanFieldParticleSystem):
+#         def __init__(self, ode_state_space: list[any], num_particles: int, name: str = None):
+#             super().__init__(state_space=ode_state_space, num_particles=num_particles, name=name)
 
-        def rate(self, src: any,
-                 tgt: any,
-                 meas: dict[tuple[any], float]) -> float:
-            if one_coordinate_apart(src, tgt):
-                # find the index of the changed coordinate
-                changed_index = next(i for i in range(len(src)) if src[i] != tgt[i])
+#         def rate(self, src: any,
+#                  tgt: any,
+#                  meas: dict[tuple[any], float]) -> float:
+#             if one_coordinate_apart(src, tgt):
+#                 # find the index of the changed coordinate
+#                 changed_index = next(i for i in range(len(src)) if src[i] != tgt[i])
 
-                # if the root jumped, return usual rate
-                if changed_index == 0:
-                    return ips.rate(src[0], tgt[0], src[1:])
-                # otherwise, take conditional rate
-                else:
-                    return gamma(src[changed_index], tgt[changed_index], src[changed_index], src[0], meas)
-            return 0.0
+#                 # if the root jumped, return usual rate
+#                 if changed_index == 0:
+#                     return ips.rate(src[0], tgt[0], src[1:])
+#                 # otherwise, take conditional rate
+#                 else:
+#                     return gamma(src[changed_index], tgt[changed_index], src[changed_index], src[0], meas)
+#             return 0.0
 
-    # calculate initial conditions on ode_state_space given i.i.d. initial conditions on vertices
-    mf_init = {}
-    for i in range(num_particles):
-        # pick offspring number from degree distribution
-        k = np.random.choice(deg_supp, p=[deg_dist[i] for i in deg_supp])
-        # pick states for root and k leafs
-        init_state = tuple(
-            [np.random.choice(ips.state_space, p=[initial_conditions[s] for s in ips.state_space]) for _ in
-             range(k + 1)])
-        # add to initial conditions
-        mf_init[i] = init_state
+#     # calculate initial conditions on ode_state_space given i.i.d. initial conditions on vertices
+#     mf_init = {}
+#     for i in range(num_particles):
+#         # pick offspring number from degree distribution
+#         k = np.random.choice(deg_supp, p=[deg_dist[i] for i in deg_supp])
+#         # pick states for root and k leafs
+#         init_state = tuple(
+#             [np.random.choice(ips.state_space, p=[initial_conditions[s] for s in ips.state_space]) for _ in
+#              range(k + 1)])
+#         # add to initial conditions
+#         mf_init[i] = init_state
 
-    # create the mean-field particle system
-    mfps = MLFEParticleSystem(ode_state_space, num_particles, name=f"Mean-field approximation for MLFE for {ips.name}")
-    # simulate the mean-field particle system (timed)
-    mf_jump_list = simulate_mean_field_jump_process(mfps=mfps, initial_conditions=mf_init, max_time=max_time, seed=seed)
+#     # create the mean-field particle system
+#     mfps = MLFEParticleSystem(ode_state_space, num_particles, name=f"Mean-field approximation for MLFE for {ips.name}")
+#     # simulate the mean-field particle system (timed)
+#     mf_jump_list = simulate_mean_field_jump_process(mfps=mfps, initial_conditions=mf_init, max_time=max_time, seed=seed)
 
-    # convert jump list to array with time and state
-    time_points = np.linspace(0, max_time, num_grid_points)
-    time_state_dict = get_particle_states_at_times(mf_jump_list, mf_init, list(time_points))
+#     # convert jump list to array with time and state
+#     time_points = np.linspace(0, max_time, num_grid_points)
+#     time_state_dict = get_particle_states_at_times(mf_jump_list, mf_init, list(time_points))
 
-    time_state_ndarray = np.zeros((len(ode_state_space), num_grid_points))
-    for t_idx, state_at_time in enumerate(time_state_dict):
-        counter = Counter(state_at_time.values())
-        for state in ode_state_space:
-            time_state_ndarray[ode_state_space_to_index[state], t_idx] = counter[state] / num_particles
+#     time_state_ndarray = np.zeros((len(ode_state_space), num_grid_points))
+#     for t_idx, state_at_time in enumerate(time_state_dict):
+#         counter = Counter(state_at_time.values())
+#         for state in ode_state_space:
+#             time_state_ndarray[ode_state_space_to_index[state], t_idx] = counter[state] / num_particles
 
-    return time_points, time_state_ndarray, index_to_ode_state_space
+#     return time_points, time_state_ndarray, index_to_ode_state_space
