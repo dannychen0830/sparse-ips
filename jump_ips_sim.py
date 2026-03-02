@@ -72,10 +72,11 @@ def simulate_jump_process(
             for target_state in ips.state_space:
                 if target_state != current_node_state:
                     transition_rate = ips.sim_rate(
-                        node,
-                        current_node_state,
-                        target_state,
-                        current_vertex_state,
+                        node=node,
+                        source_state=current_node_state,
+                        target_state=target_state,
+                        current_config=current_vertex_state,
+                        t=current_time,
                         meas=meas,
                         current_edge_state=current_edge_state,
                     )
@@ -98,7 +99,8 @@ def simulate_jump_process(
                         current_edge_state[edge],
                         target_state,
                         current_vertex_state,
-                        meas=meas
+                        meas=meas,
+                        t=current_time,
                     )
 
                     if transition_rate > 0:

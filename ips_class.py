@@ -54,6 +54,7 @@ class ParticleSystem:
              neighbors: tuple[any],
              neighbors_vertex_type: list[any] = None,
              neighbors_edge_type: list[any] = None,
+                neighbors_edge_state: list[any] = None,
              meas: dict[tuple[any], float] = None,
              t: float = None
              ) -> float:
@@ -158,7 +159,7 @@ class ParticleSystem:
             source_state: any,
             target_state: any,
             current_config: dict[int, any],
-            t: float = None
+            t: float = None,
             meas: dict[tuple[any], float] = None,
             current_edge_state: dict[tuple[int, int], any] = None,
     ):
@@ -217,6 +218,7 @@ class ParticleSystem:
         target_state: any,
         current_config: dict[int, any],
         meas: dict[tuple[any], float] = None,
+        t: float = None,
     ):
         if self.edge_rate is None:
             raise ValueError("Edge rate function is not defined.")
@@ -234,7 +236,8 @@ class ParticleSystem:
             source_state,
             target_state,
             vertex_states,
-            meas
+            meas=meas,
+            t=t
         )
         
 

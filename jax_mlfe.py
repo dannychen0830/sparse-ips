@@ -548,18 +548,19 @@ def jax_build_static_maps_vmap(ips, ode_state_space, vertex_state_space, state_t
                 changed_index = next(i for i in range(len(src)) if src[i] != tgt[i])
                 # TODO: this can be optimized as edges are permutation invariant
                 for vertex_neighborhood_types in vertex_state_space:
-                    transition_idx += 1
+                    if len(vertex_neighborhood_types) == len(src) + 1:
+                        transition_idx += 1
 
-                    row_idx = ode_state_to_index[(vertex_neighborhood_types, src)]
-                    col_idx = ode_state_to_index[(vertex_neighborhood_types, tgt)]
+                        row_idx = ode_state_to_index[(vertex_neighborhood_types, src)]
+                        col_idx = ode_state_to_index[(vertex_neighborhood_types, tgt)]
 
-                    rows.append(row_idx)
-                    cols.append(col_idx)
-                    edge_jump_indices.append(transition_idx)
+                        rows.append(row_idx)
+                        cols.append(col_idx)
+                        edge_jump_indices.append(transition_idx)
 
-                    edge_src_list.append(src[changed_index])
-                    edge_tgt_list.append(tgt[changed_index])
-                    edge_neighbor_vertex_states_list.append((vertex_neighborhood_types[0], vertex_neighborhood_types[changed_index+1]))
+                        edge_src_list.append(src[changed_index])
+                        edge_tgt_list.append(tgt[changed_index])
+                        edge_neighbor_vertex_states_list.append((vertex_neighborhood_types[0], vertex_neighborhood_types[changed_index+1]))
     
 
     # Convert lists to padded arrays
