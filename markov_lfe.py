@@ -200,7 +200,6 @@ def simulate_markov_lfe(
         num_grid_points: int = 100,
         solver_type: str = 'explicit',
         step_control: str = 'constant',
-        vectorized: bool = None,
         verbose: bool = True,
         static_args: dict[str, jnp.ndarray] = None,
         sparse_indices: jnp.ndarray = None,
@@ -245,71 +244,44 @@ def simulate_markov_lfe(
     if verbose:
         print('**** Building rate matrix structure ****')
 
-    if vectorized is None:
-        vectorized = hasattr(ips, 'rate_vectorized')
-    if vectorized:
-        # Validate that user provided vectorized rate function
-        if not hasattr(ips, 'rate_vectorized'):
+    if ips.params is None:
+        raise ValueError("ParticleSystem must set self.params before calling simulate_markov_lfe.")
+    rate_params = ips.params
+
+    if static_args is None or sparse_indices is None:
+        static_args, sparse_indices = jax_build_static_maps_vmap(
+            ips,
+            ode_state_space,
+            vertex_state_space,
+            ips.get_state_to_index_map(),
+            ode_state_space_to_index,
+            jax_gamma_index_builder_vmap,
+            vertex_type_space=vertex_type_space if ips.vertex_type_space is not None else None,
+            edge_type_space=edge_type_space if ips.edge_type_space is not None else None,
+            edge_state_space=edge_state_space if ips.edge_state_space is not None else None,
+        )
+
+    if rate_caller is None:
+        rate_caller = make_rate_caller(
+            ips.rate,
+            rate_params,
+            ips.vertex_type_space is not None,
+            ips.edge_type_space is not None,
+            ips.edge_state_space is not None,
+        )
+    static_args["rate_caller"] = rate_caller
+
+    if ips.edge_state_space is not None:
+        if not hasattr(ips, 'edge_rate_vectorized'):
             raise ValueError(
-                "JAX backend requires 'rate_vectorized' method. "
-                "This method must use JAX-compatible operations (jnp.where, jax.vmap, etc.) "
-                "and accept vectorized inputs. See documentation for examples."
+                "Systems with edge_state_space require an 'edge_rate_vectorized' method."
             )
-
-        # Extract parameters from ips
-        if ips.params is None:
-            raise ValueError("JAX backend requires 'params' attribute in ParticleSystem.")
-        rate_params = ips.params
-
-        if static_args is None or sparse_indices is None:
-            # Build static structure
-            static_args, sparse_indices = jax_build_static_maps_vmap(
-                ips,
-                ode_state_space,
-                vertex_state_space, 
-                ips.get_state_to_index_map(),
-                ode_state_space_to_index,
-                jax_gamma_index_builder_vmap,
-                vertex_type_space=vertex_type_space if ips.vertex_type_space is not None else None,
-                edge_type_space=edge_type_space if ips.edge_type_space is not None else None,
-                edge_state_space=edge_state_space if ips.edge_state_space is not None else None
-            )
-
-                # Create rate caller
-            if rate_caller is None:
-                rate_caller = make_rate_caller(ips.rate_vectorized,
-                                            rate_params,
-                                            ips.vertex_type_space is not None,
-                                            ips.edge_type_space is not None,
-                                            ips.edge_state_space is not None)
-       
-        static_args["rate_caller"] = rate_caller
-
-        # Create rate caller for edge rates 
-        if ips.edge_state_space is not None:
-            if not hasattr(ips, 'edge_rate_vectorized'):
-                raise ValueError(
-                    "JAX backend requires 'edge_rate_vectorized' method. "
-                    "This method must use JAX-compatible operations (jnp.where, jax.vmap, etc.) "
-                    "and accept vectorized inputs. See documentation for examples."
-                )
-            edge_rate_caller = make_edge_rate_caller(ips.edge_rate_vectorized, rate_params)
-        else:
-            edge_rate_caller = lambda *args: None
-        static_args["edge_rate_caller"] = edge_rate_caller
-
-        # define vector field
-        term = diffrax.ODETerm(jax_mlfe_vector_field_vmap)
+        edge_rate_caller = make_edge_rate_caller(ips.edge_rate_vectorized, rate_params)
     else:
-        if ips.global_interaction or ips.edge_state_space is not None:
-            raise ValueError("Backend does not support global interactions in non-vectorized mode.")
-        # Build static structure
-        static_args, _ = jax_build_static_maps(ips, ode_state_space, vertex_state_space, ode_state_space_to_index,
-                                               jax_gamma_index_builder,
-                                               vertex_type_space=vertex_type_space if ips.vertex_type_space is not None else None,
-                                               edge_type_space=edge_type_space if ips.edge_type_space is not None else None)
-        # define vector field
-        term = diffrax.ODETerm(jax_mlfe_vector_field)
+        edge_rate_caller = lambda *args: None
+    static_args["edge_rate_caller"] = edge_rate_caller
+
+    term = diffrax.ODETerm(jax_mlfe_vector_field_vmap)
 
     # Set up ODE solver
     # Initialize

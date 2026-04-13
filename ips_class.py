@@ -47,20 +47,59 @@ class ParticleSystem:
 
         self.params = None
 
+        # Index caches: string label → integer index, built once at construction.
+        # Used by sim_rate() to convert the string-based simulation state into
+        # the integer-index convention expected by rate().
+        self._state_to_idx = {s: i for i, s in enumerate(state_space)}
+        self._vtype_to_idx = (
+            {t: i for i, t in enumerate(vertex_type_space)}
+            if vertex_type_space else {}
+        )
+        self._etype_to_idx = (
+            {t: i for i, t in enumerate(edge_type_space)}
+            if edge_type_space else {}
+        )
+        self._estate_to_idx = (
+            {s: i for i, s in enumerate(edge_state_space)}
+            if edge_state_space else {}
+        )
+
     @abstractmethod
     def rate(self,
-             src: any,
-             tgt: any,
-             neighbors: tuple[any],
-             neighbors_vertex_type: list[any] = None,
-             neighbors_edge_type: list[any] = None,
-                neighbors_edge_state: list[any] = None,
-             meas: dict[tuple[any], float] = None,
-             t: float = None
+             src: int,
+             tgt: int,
+             neighbors: np.ndarray,
+             params: dict,
+             *,
+             vertex_types: np.ndarray = None,
+             edge_types: np.ndarray = None,
+             edge_states: np.ndarray = None,
+             meas: np.ndarray = None,
+             t: float = None,
              ) -> float:
         """
-        Compute the rate of transition from source_state to target_state for a given node.
-        This method should be implemented by subclasses.
+        Compute the transition rate from state *src* to state *tgt* for one node.
+
+        Parameters
+        ----------
+        src, tgt : int
+            Integer indices into self.state_space.
+        neighbors : array of int, shape (num_neighbours,)
+            State indices of the node's graph neighbours.
+        params : dict
+            Pre-built JAX/numpy arrays (e.g. rate matrices).  Passed explicitly
+            so the method is JIT-friendly without capturing self.
+        vertex_types : array of int, shape (1 + num_neighbours,) or None
+            Integer type indices for [root, *neighbours].  None when not configured.
+        edge_types : array of int, shape (num_neighbours,) or None
+            Integer type indices for each incident edge.  None when not configured.
+        edge_states : array of int, shape (num_neighbours,) or None
+            Integer state indices for each incident edge.  None when not configured.
+        meas : 1-D float array, shape (len(neighborhood_state_space),) or None
+            Global empirical measure, indexed like neighborhood_state_space.
+            None unless global_interaction=True.
+        t : float or None
+            Current simulation time.
         """
         raise NotImplementedError("Subclasses should implement this method.")
 
@@ -163,53 +202,57 @@ class ParticleSystem:
             meas: dict[tuple[any], float] = None,
             current_edge_state: dict[tuple[int, int], any] = None,
     ):
-        # get neighbors of the source state
-        neighbors_state = tuple(
-            [current_config[neighbor] for neighbor in self.graph.neighbors(node)]
-        )
-        # get neighbors vertex type
-        neighbors_vertex_type = (
-            None
-            if self.vertex_type is None
-            else [self.vertex_type[node]]
-                 + [self.vertex_type[neighbor] for neighbor in self.graph.neighbors(node)]
-        )
-        # get neighbors edge type
-        neighbors_edge_type = (
-            None
-            if self.edge_type is None
-            else [
-                self.edge_type[tuple(sorted((node, neighbor)))]
-                for neighbor in self.graph.neighbors(node)
-            ]
-        )
+        """Convert string-based simulation state to integer indices, then call rate()."""
+        nbrs = list(self.graph.neighbors(node))
 
-        # get neighbors edge state
-        neighbors_edge_state = (
-            None
-            if self.edge_state_space is None
-            else [
-                current_edge_state[tuple(sorted((node, neighbor)))]
-                for neighbor in self.graph.neighbors(node)
-            ]
-        )
+        # --- state indices ---
+        src = self._state_to_idx[source_state]
+        tgt = self._state_to_idx[target_state]
+        neighbors = np.array([self._state_to_idx[current_config[n]] for n in nbrs],
+                             dtype=np.int32)
 
-        # get global neighborhood empirical measure in the form of dictionary
-        if self.global_interaction and meas is None:
-            global_empirical_measure = self.compute_global_empirical_measure(current_config)
-        else:
-            global_empirical_measure = meas
+        # --- vertex types: [root_type, *neighbour_types] ---
+        vertex_types = None
+        if self.vertex_type is not None:
+            vertex_types = np.array(
+                [self._vtype_to_idx[self.vertex_type[node]]]
+                + [self._vtype_to_idx[self.vertex_type[n]] for n in nbrs],
+                dtype=np.int32,
+            )
 
-        return self.rate(
-            source_state,
-            target_state,
-            neighbors_state,
-            neighbors_vertex_type=neighbors_vertex_type,
-            neighbors_edge_type=neighbors_edge_type,
-            neighbors_edge_state=neighbors_edge_state,
-            meas=global_empirical_measure,
-            t=t
-        )
+        # --- edge types: one per incident edge ---
+        edge_types = None
+        if self.edge_type is not None:
+            edge_types = np.array(
+                [self._etype_to_idx[self.edge_type[tuple(sorted((node, n)))]] for n in nbrs],
+                dtype=np.int32,
+            )
+
+        # --- edge states: one per incident edge ---
+        edge_states = None
+        if self.edge_state_space is not None and current_edge_state is not None:
+            edge_states = np.array(
+                [self._estate_to_idx[current_edge_state[tuple(sorted((node, n)))]] for n in nbrs],
+                dtype=np.int32,
+            )
+
+        # --- global empirical measure: dict → 1-D array ---
+        meas_array = None
+        if self.global_interaction:
+            meas_dict = meas if meas is not None else self.compute_global_empirical_measure(current_config)
+            meas_array = np.array(
+                [meas_dict.get(state, 0.0) for state in self.neighborhood_state_space],
+                dtype=np.float32,
+            )
+
+        return float(self.rate(
+            src, tgt, neighbors, self.params,
+            vertex_types=vertex_types,
+            edge_types=edge_types,
+            edge_states=edge_states,
+            meas=meas_array,
+            t=t,
+        ))
 
     def edge_sim_rate(
         self,

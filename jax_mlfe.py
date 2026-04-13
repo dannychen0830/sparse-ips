@@ -69,55 +69,43 @@ def compute_jax_static_args(ips):
     return ode_state_space_to_index, static_args, sparse_indices
 
 
-def make_rate_caller(rate_func_vectorized, params, has_vertex_types, has_edge_types, has_edge_states):
+def make_rate_caller(rate_func, params, has_vertex_types, has_edge_types, has_edge_states):
     """
-    Creates a wrapper around the user's rate function that handles:
-    - Parameter passing
-    - Masking padded values
-    - Type handling
+    Creates a JIT-compiled, vmapped wrapper around the user's rate() method.
+
+    rate_func has the Phase-1 unified signature:
+        rate(src, tgt, neighbors, params, *, vertex_types, edge_types, edge_states, meas, t)
+
+    params is captured in the closure so it is static at JIT-trace time.
+    The 4-way branch here is resolved at *trace time* (Python booleans), so no
+    runtime branching occurs.  It will be collapsed into one vmap call in Phase 2.
     """
     @jax.jit
     def call_rates(src, tgt, neighbors, vertex_types, edge_types, edge_states, meas, t):
-        """
-        Vectorized rate computation.
-
-        Args:
-            src: (N,) array of source states
-            tgt: (N,) array of target states
-            neighbors: (N, max_neighbors) array of neighbor states (padded with -1) TODO: update max_neighbors + 1
-            vertex_types: (N, max_neighbors) array of vertex types (padded with -1)
-            edge_types: (N, max_neighbors) array of edge types (padded with -1)
-            has_vertex_types: bool
-            has_edge_types: bool
-
-        Returns:
-            (N,) array of rates
-        """
-        # Call user's rate function
         if has_vertex_types:
             rates = jax.vmap(
-                lambda src, tgt, nei, vt, p, t: rate_func_vectorized(
-                    src, tgt, nei, vertex_types=vt, params=params, meas=p, t=t
+                lambda src, tgt, nei, vt, p, t: rate_func(
+                    src, tgt, nei, params, vertex_types=vt, meas=p, t=t
                 ),
                 in_axes=(0, 0, 0, 0, None, None)
             )(src, tgt, neighbors, vertex_types, meas, t)
         elif has_edge_types:
             rates = jax.vmap(
-                lambda src, tgt, nei, et, p, t: rate_func_vectorized(
-                    src, tgt, nei, edge_types=et, params=params, meas=p, t=t
+                lambda src, tgt, nei, et, p, t: rate_func(
+                    src, tgt, nei, params, edge_types=et, meas=p, t=t
                 ),
                 in_axes=(0, 0, 0, 0, None, None)
             )(src, tgt, neighbors, edge_types, meas, t)
         elif has_edge_states:
             rates = jax.vmap(
-                    lambda src, tgt, nei, es, p, t: rate_func_vectorized(
-                        src, tgt, nei, edge_states=es, params=params, meas=p, t=t
-                    ),
-                    in_axes=(0, 0, 0, 0, None, None)
-                )(src, tgt, neighbors, edge_states, meas, t)
+                lambda src, tgt, nei, es, p, t: rate_func(
+                    src, tgt, nei, params, edge_states=es, meas=p, t=t
+                ),
+                in_axes=(0, 0, 0, 0, None, None)
+            )(src, tgt, neighbors, edge_states, meas, t)
         else:
             rates = jax.vmap(
-                lambda src, tgt, nei, p, t: rate_func_vectorized(src, tgt, nei, params=params, meas=p, t=t),
+                lambda src, tgt, nei, p, t: rate_func(src, tgt, nei, params, meas=p, t=t),
                 in_axes=(0, 0, 0, None, None)
             )(src, tgt, neighbors, meas, t)
         return rates
