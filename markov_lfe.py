@@ -105,9 +105,7 @@ def jax_mlfe_vector_field_vmap(t, p, args):
         args["root_src"],
         args["root_tgt"],
         args["neighbors"],
-        args["neighbors_vertex_types"],
-        args["neighbors_edge_types"],
-        args["neighbors_edge_states"],
+        args["root_marks"],
         p,
         t
     )
@@ -122,9 +120,7 @@ def jax_mlfe_vector_field_vmap(t, p, args):
         args["gamma_src"],
         args["gamma_tgt"],
         args["gamma_neighbors"],
-        args["gamma_neighbors_vertex_types"],
-        args["gamma_neighbors_edge_types"],
-        args["gamma_neighbors_edge_states"],
+        args["gamma_marks"],
         p,
         t
     )
@@ -262,13 +258,7 @@ def simulate_markov_lfe(
         )
 
     if rate_caller is None:
-        rate_caller = make_rate_caller(
-            ips.rate,
-            rate_params,
-            ips.vertex_type_space is not None,
-            ips.edge_type_space is not None,
-            ips.edge_state_space is not None,
-        )
+        rate_caller = make_rate_caller(ips.rate, rate_params)
     static_args["rate_caller"] = rate_caller
 
     if ips.edge_state_space is not None:

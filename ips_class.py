@@ -71,9 +71,7 @@ class ParticleSystem:
              neighbors: np.ndarray,
              params: dict,
              *,
-             vertex_types: np.ndarray = None,
-             edge_types: np.ndarray = None,
-             edge_states: np.ndarray = None,
+             marks: dict = None,
              meas: np.ndarray = None,
              t: float = None,
              ) -> float:
@@ -89,12 +87,11 @@ class ParticleSystem:
         params : dict
             Pre-built JAX/numpy arrays (e.g. rate matrices).  Passed explicitly
             so the method is JIT-friendly without capturing self.
-        vertex_types : array of int, shape (1 + num_neighbours,) or None
-            Integer type indices for [root, *neighbours].  None when not configured.
-        edge_types : array of int, shape (num_neighbours,) or None
-            Integer type indices for each incident edge.  None when not configured.
-        edge_states : array of int, shape (num_neighbours,) or None
-            Integer state indices for each incident edge.  None when not configured.
+        marks : dict or None
+            Optional per-node/edge annotations.  Keys present depend on the model:
+              'vertex_types' : int array, shape (1 + num_neighbours,)
+              'edge_types'   : int array, shape (num_neighbours,)
+              'edge_states'  : int array, shape (num_neighbours,)
         meas : 1-D float array, shape (len(neighborhood_state_space),) or None
             Global empirical measure, indexed like neighborhood_state_space.
             None unless global_interaction=True.
@@ -245,11 +242,15 @@ class ParticleSystem:
                 dtype=np.float32,
             )
 
+        marks = {k: v for k, v in [
+            ('vertex_types', vertex_types),
+            ('edge_types',   edge_types),
+            ('edge_states',  edge_states),
+        ] if v is not None}
+
         return float(self.rate(
             src, tgt, neighbors, self.params,
-            vertex_types=vertex_types,
-            edge_types=edge_types,
-            edge_states=edge_states,
+            marks=marks or None,
             meas=meas_array,
             t=t,
         ))

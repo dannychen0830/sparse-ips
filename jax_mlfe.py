@@ -69,45 +69,22 @@ def compute_jax_static_args(ips):
     return ode_state_space_to_index, static_args, sparse_indices
 
 
-def make_rate_caller(rate_func, params, has_vertex_types, has_edge_types, has_edge_states):
+def make_rate_caller(rate_func, params):
     """
     Creates a JIT-compiled, vmapped wrapper around the user's rate() method.
 
-    rate_func has the Phase-1 unified signature:
-        rate(src, tgt, neighbors, params, *, vertex_types, edge_types, edge_states, meas, t)
+    rate_func has the unified signature:
+        rate(src, tgt, neighbors, params, *, marks, meas, t)
 
     params is captured in the closure so it is static at JIT-trace time.
-    The 4-way branch here is resolved at *trace time* (Python booleans), so no
-    runtime branching occurs.  It will be collapsed into one vmap call in Phase 2.
+    marks is a dict pytree; JAX vmaps over its leaves automatically.
     """
     @jax.jit
-    def call_rates(src, tgt, neighbors, vertex_types, edge_types, edge_states, meas, t):
-        if has_vertex_types:
-            rates = jax.vmap(
-                lambda src, tgt, nei, vt, p, t: rate_func(
-                    src, tgt, nei, params, vertex_types=vt, meas=p, t=t
-                ),
-                in_axes=(0, 0, 0, 0, None, None)
-            )(src, tgt, neighbors, vertex_types, meas, t)
-        elif has_edge_types:
-            rates = jax.vmap(
-                lambda src, tgt, nei, et, p, t: rate_func(
-                    src, tgt, nei, params, edge_types=et, meas=p, t=t
-                ),
-                in_axes=(0, 0, 0, 0, None, None)
-            )(src, tgt, neighbors, edge_types, meas, t)
-        elif has_edge_states:
-            rates = jax.vmap(
-                lambda src, tgt, nei, es, p, t: rate_func(
-                    src, tgt, nei, params, edge_states=es, meas=p, t=t
-                ),
-                in_axes=(0, 0, 0, 0, None, None)
-            )(src, tgt, neighbors, edge_states, meas, t)
-        else:
-            rates = jax.vmap(
-                lambda src, tgt, nei, p, t: rate_func(src, tgt, nei, params, meas=p, t=t),
-                in_axes=(0, 0, 0, None, None)
-            )(src, tgt, neighbors, meas, t)
+    def call_rates(src, tgt, neighbors, marks, meas, t):
+        rates = jax.vmap(
+            lambda s, tg, nei, m, p: rate_func(s, tg, nei, params, marks=m, meas=p, t=t),
+            in_axes=(0, 0, 0, 0, None)
+        )(src, tgt, neighbors, marks, meas)
         return rates
 
     return call_rates
@@ -636,27 +613,31 @@ def jax_build_static_maps_vmap(ips, ode_state_space, vertex_state_space, state_t
         "rows": jnp.array(rows, dtype=jnp.int32),
         "cols": jnp.array(cols, dtype=jnp.int32),
 
-        # Root jump 
+        # Root jump
         "root_idx_map": jnp.array(root_jump_indices, dtype=jnp.int32),
         "root_src": jnp.array([state_to_index[s] for s in root_src_list], dtype=jnp.int32),
         "root_tgt": jnp.array([state_to_index[s] for s in root_tgt_list], dtype=jnp.int32),
         "neighbors": jnp.array(neighbor_states_padded, dtype=jnp.int32),
-        "neighbors_vertex_types": jnp.array(root_neighbor_vertex_types_padded, dtype=jnp.int32),
-        "neighbors_edge_types": jnp.array(root_neighbor_edge_types_padded, dtype=jnp.int32),
-        "neighbors_edge_states": jnp.array(root_neighbor_edge_states_padded, dtype=jnp.int32),
+        "root_marks": {
+            "vertex_types": jnp.array(root_neighbor_vertex_types_padded, dtype=jnp.int32),
+            "edge_types":   jnp.array(root_neighbor_edge_types_padded, dtype=jnp.int32),
+            "edge_states":  jnp.array(root_neighbor_edge_states_padded, dtype=jnp.int32),
+        },
 
-        # Neighbor jump 
+        # Neighbor jump
         "neigh_idx_map": jnp.array(neighbor_jump_indices, dtype=jnp.int32),
         "gamma_indices": jnp.array(gamma_indices_padded, dtype=jnp.int32),
         "gamma_weights": jnp.array(gamma_weights_padded, dtype=jnp.float32),
 
-        # Flattened gamma term  (for vectorized rate calls)
+        # Flattened gamma terms (for vectorized rate calls)
         "gamma_src": jnp.array([state_to_index[s] for s in gamma_src_list], dtype=jnp.int32),
         "gamma_tgt": jnp.array([state_to_index[s] for s in gamma_tgt_list], dtype=jnp.int32),
         "gamma_neighbors": jnp.array(gamma_neighbor_states_padded, dtype=jnp.int32),
-        "gamma_neighbors_vertex_types": jnp.array(gamma_neighbor_vertex_types_padded, dtype=jnp.int32),
-        "gamma_neighbors_edge_types": jnp.array(gamma_neighbor_edge_types_padded, dtype=jnp.int32),
-        "gamma_neighbors_edge_states": jnp.array(gamma_neighbor_edge_states_padded, dtype=jnp.int32),
+        "gamma_marks": {
+            "vertex_types": jnp.array(gamma_neighbor_vertex_types_padded, dtype=jnp.int32),
+            "edge_types":   jnp.array(gamma_neighbor_edge_types_padded, dtype=jnp.int32),
+            "edge_states":  jnp.array(gamma_neighbor_edge_states_padded, dtype=jnp.int32),
+        },
 
         # Edge jump structures
         "edge_idx_map": jnp.array(edge_jump_indices, dtype=jnp.int32),
