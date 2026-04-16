@@ -619,9 +619,9 @@ def jax_build_static_maps_vmap(ips, ode_state_space, vertex_state_space, state_t
         "root_tgt": jnp.array([state_to_index[s] for s in root_tgt_list], dtype=jnp.int32),
         "neighbors": jnp.array(neighbor_states_padded, dtype=jnp.int32),
         "root_marks": {
-            "vertex_types": jnp.array(root_neighbor_vertex_types_padded, dtype=jnp.int32),
-            "edge_types":   jnp.array(root_neighbor_edge_types_padded, dtype=jnp.int32),
-            "edge_states":  jnp.array(root_neighbor_edge_states_padded, dtype=jnp.int32),
+            **({"vertex_types": jnp.array(root_neighbor_vertex_types_padded, dtype=jnp.int32)} if ips.vertex_type_space is not None else {}),
+            **({"edge_types":   jnp.array(root_neighbor_edge_types_padded,   dtype=jnp.int32)} if ips.edge_type_space   is not None else {}),
+            **({"edge_states":  jnp.array(root_neighbor_edge_states_padded,  dtype=jnp.int32)} if ips.edge_state_space  is not None else {}),
         },
 
         # Neighbor jump
@@ -634,9 +634,9 @@ def jax_build_static_maps_vmap(ips, ode_state_space, vertex_state_space, state_t
         "gamma_tgt": jnp.array([state_to_index[s] for s in gamma_tgt_list], dtype=jnp.int32),
         "gamma_neighbors": jnp.array(gamma_neighbor_states_padded, dtype=jnp.int32),
         "gamma_marks": {
-            "vertex_types": jnp.array(gamma_neighbor_vertex_types_padded, dtype=jnp.int32),
-            "edge_types":   jnp.array(gamma_neighbor_edge_types_padded, dtype=jnp.int32),
-            "edge_states":  jnp.array(gamma_neighbor_edge_states_padded, dtype=jnp.int32),
+            **({"vertex_types": jnp.array(gamma_neighbor_vertex_types_padded, dtype=jnp.int32)} if ips.vertex_type_space is not None else {}),
+            **({"edge_types":   jnp.array(gamma_neighbor_edge_types_padded,   dtype=jnp.int32)} if ips.edge_type_space   is not None else {}),
+            **({"edge_states":  jnp.array(gamma_neighbor_edge_states_padded,  dtype=jnp.int32)} if ips.edge_state_space  is not None else {}),
         },
 
         # Edge jump structures

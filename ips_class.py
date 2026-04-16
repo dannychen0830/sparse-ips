@@ -1,5 +1,6 @@
 import networkx as nx
 import numpy as np
+import jax
 from abc import abstractmethod
 from itertools import product
 from collections import Counter
@@ -46,6 +47,7 @@ class ParticleSystem:
         self.global_interaction = global_interaction
 
         self.params = None
+        self._jit_rate = None  # lazily compiled on first sim_rate call
 
         # Index caches: string label → integer index, built once at construction.
         # Used by sim_rate() to convert the string-based simulation state into
@@ -99,6 +101,11 @@ class ParticleSystem:
             Current simulation time.
         """
         raise NotImplementedError("Subclasses should implement this method.")
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        state['_jit_rate'] = None  # jax.jit functions are not picklable; lazily recompiled in worker
+        return state
 
     def get_empirical_degree_distribution(self):
         if self.deg_dist is not None:
@@ -242,17 +249,27 @@ class ParticleSystem:
                 dtype=np.float32,
             )
 
-        marks = {k: v for k, v in [
-            ('vertex_types', vertex_types),
-            ('edge_types',   edge_types),
-            ('edge_states',  edge_states),
-        ] if v is not None}
+        marks = {}
+        if vertex_types is not None: marks['vertex_types'] = vertex_types
+        if edge_types   is not None: marks['edge_types']   = edge_types
+        if edge_states  is not None: marks['edge_states']  = edge_states
 
-        return float(self.rate(
-            src, tgt, neighbors, self.params,
-            marks=marks or None,
-            meas=meas_array,
-            t=t,
+        if self._jit_rate is None:
+            # Capture params in the closure (not as a traced argument) so that
+            # Python scalars/bools in params (e.g. global_interaction) stay
+            # concrete at JIT-trace time — same pattern as make_rate_caller.
+            _params = self.params
+            _rate = self.rate
+            self._jit_rate = jax.jit(
+                lambda src, tgt, neighbors, marks, meas, t:
+                    _rate(src, tgt, neighbors, _params, marks=marks, meas=meas, t=t)
+            )
+
+        return float(self._jit_rate(
+            src, tgt, neighbors,
+            marks if marks else None,
+            meas_array,
+            t,
         ))
 
     def edge_sim_rate(
