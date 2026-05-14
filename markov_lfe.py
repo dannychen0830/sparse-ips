@@ -3,7 +3,9 @@ from sparseips.jump_ips_sim import simulate_mean_field_jump_process, get_particl
 from sparseips.jax_mlfe import *
 
 from jax.experimental import sparse
+import jax
 import jax.numpy as jnp
+import numpy as np
 import diffrax
 import lineax as lx
 import optimistix as optx
@@ -346,6 +348,184 @@ def simulate_markov_lfe(
     )
 
     return sol.ts, sol.ys.transpose(), index_to_ode_state_space
+
+
+def find_stationary_distribution(
+        ips: ParticleSystem,
+        initial_conditions: dict,
+        vertex_type_init: dict = None,
+        edge_type_init: dict = None,
+        edge_state_init: dict = None,
+        static_args: dict = None,
+        sparse_indices: jnp.ndarray = None,
+        rate_caller: callable = None,
+        y0_override: np.ndarray = None,
+        tol: float = 1e-8,
+        verbose: bool = True,
+) -> tuple[np.ndarray, dict]:
+    """
+    Directly solve Q(p*)ᵀ p* = 0,  sum(p*) = 1  for the stationary distribution.
+
+    For linear models (Q independent of p) this is equivalent to finding the
+    null vector of Qᵀ.  For nonlinear models (Q depends on p via
+    global_interaction) it is a self-consistent fixed-point equation.
+
+    The residual  r(p) = Q(p)ᵀ p  is exactly the ODE right-hand side
+    computed by jax_mlfe_vector_field_vmap.  The first component of r is
+    replaced by the normalization constraint sum(p) − 1 = 0, making the
+    square system full-rank.  scipy.optimize.fsolve is used as the solver.
+
+    Parameters
+    ----------
+    ips : ParticleSystem
+    initial_conditions : dict[state, float]
+        Per-state marginal probabilities; used as the initial guess.
+        Choose a biased IC to track a specific branch when multiple fixed
+        points exist.
+    tol : float
+        xtol / ftol passed to scipy.optimize.fsolve.
+    verbose : bool
+
+    Returns
+    -------
+    p_star : np.ndarray  (num_states,)
+        Stationary probability vector over the ODE state space.
+    idx_to_state : dict[int, tuple]
+        Maps ODE-state index → state tuple (same format as simulate_markov_lfe).
+    """
+    from scipy.optimize import fsolve
+
+    deg_dist = ips.deg_dist
+    deg_supp = ips.deg_supp
+
+    # ── build ODE state space (mirrors simulate_markov_lfe) ─────────────────
+    if ips.vertex_type_space is None and ips.edge_type_space is None and ips.edge_state_space is None:
+        vertex_state_space = [(root,) + children for k in deg_supp for (root, children) in
+                              product(ips.state_space, product(ips.state_space, repeat=k))]
+        ode_state_space = vertex_state_space
+    elif ips.vertex_type_space is not None and ips.edge_type_space is None and ips.edge_state_space is None:
+        vertex_state_space = [(root,) + children for k in deg_supp for (root, children) in
+                              product(ips.state_space, product(ips.state_space, repeat=k))]
+        vertex_type_space = [(root,) + children for k in deg_supp for (root, children) in
+                             product(ips.vertex_type_space, product(ips.vertex_type_space, repeat=k))]
+        ode_state_space = [(state, type) for state in vertex_state_space for type in vertex_type_space if
+                           len(state) == len(type)]
+    elif ips.vertex_type_space is None and ips.edge_type_space is not None and ips.edge_state_space is None:
+        vertex_state_space = [(root,) + children for k in deg_supp for (root, children) in
+                              product(ips.state_space, product(ips.state_space, repeat=k))]
+        edge_type_space = [root_children for k in deg_supp for root_children in
+                           product(ips.edge_type_space, repeat=k)]
+        ode_state_space = [(state, type) for state in vertex_state_space for type in edge_type_space if
+                           len(state) == len(type) + 1]
+    elif ips.vertex_type_space is None and ips.edge_type_space is None and ips.edge_state_space is not None:
+        vertex_state_space = [(root,) + children for k in deg_supp for (root, children) in
+                              product(ips.state_space, product(ips.state_space, repeat=k))]
+        edge_state_space = [root_children for k in deg_supp for root_children in
+                            product(ips.edge_state_space, repeat=k)]
+        ode_state_space = [(state, type) for state in vertex_state_space for type in edge_state_space if
+                           len(state) == len(type) + 1]
+    else:
+        raise NotImplementedError(
+            "JAX backend does not support both vertex and edge type spaces simultaneously."
+        )
+
+    index_to_ode_state_space = {i: state for i, state in enumerate(ode_state_space)}
+    ode_state_space_to_index = {state: i for i, state in enumerate(ode_state_space)}
+
+    # ── build static args ────────────────────────────────────────────────────
+    if verbose:
+        print('**** Building rate matrix structure ****')
+
+    if ips.params is None:
+        raise ValueError("ParticleSystem must set self.params before calling find_stationary_distribution.")
+    rate_params = ips.params
+
+    if static_args is None or sparse_indices is None:
+        static_args, sparse_indices = jax_build_static_maps_vmap(
+            ips,
+            ode_state_space,
+            vertex_state_space,
+            ips.get_state_to_index_map(),
+            ode_state_space_to_index,
+            jax_gamma_index_builder_vmap,
+            vertex_type_space=vertex_type_space if ips.vertex_type_space is not None else None,
+            edge_type_space=edge_type_space if ips.edge_type_space is not None else None,
+            edge_state_space=edge_state_space if ips.edge_state_space is not None else None,
+        )
+
+    if rate_caller is None:
+        rate_caller = make_rate_caller(
+            ips.rate,
+            rate_params,
+            ips.vertex_type_space is not None,
+            ips.edge_type_space is not None,
+            ips.edge_state_space is not None,
+        )
+    static_args["rate_caller"] = rate_caller
+
+    if ips.edge_state_space is not None:
+        if not hasattr(ips, 'edge_rate_vectorized'):
+            raise ValueError("Systems with edge_state_space require an 'edge_rate_vectorized' method.")
+        edge_rate_caller = make_edge_rate_caller(ips.edge_rate_vectorized, rate_params)
+    else:
+        edge_rate_caller = lambda *a: None
+    static_args["edge_rate_caller"] = edge_rate_caller
+
+    # ── initial guess ────────────────────────────────────────────────────────
+    if ips.vertex_type_space is None and ips.edge_type_space is None and ips.edge_state_space is None:
+        ode_init = [initial_conditions[state[0]] * deg_dist[len(state) - 1] * np.prod(
+            [initial_conditions[child] for child in state[1:]]) for state in ode_state_space]
+    elif ips.vertex_type_space is not None and ips.edge_type_space is None and ips.edge_state_space is None:
+        ode_init = [
+            initial_conditions[state[0]] * deg_dist[len(state) - 1]
+            * np.prod([initial_conditions[child] for child in state[1:]])
+            * np.prod([vertex_type_init[t] for t in type])
+            for (state, type) in ode_state_space
+        ]
+    elif ips.vertex_type_space is None and ips.edge_type_space is not None and ips.edge_state_space is None:
+        ode_init = [
+            initial_conditions[state[0]] * deg_dist[len(state) - 1]
+            * np.prod([initial_conditions[child] for child in state[1:]])
+            * np.prod([edge_type_init[t] for t in type])
+            for (state, type) in ode_state_space
+        ]
+    elif ips.vertex_type_space is None and ips.edge_type_space is None and ips.edge_state_space is not None:
+        ode_init = [
+            initial_conditions[state[0]] * deg_dist[len(state) - 1]
+            * np.prod([initial_conditions[child] for child in state[1:]])
+            * np.prod([edge_state_init[t] for t in type])
+            for (state, type) in ode_state_space
+        ]
+    y0 = np.array(ode_init, dtype=np.float64)
+    if y0_override is not None:
+        y0 = np.array(y0_override, dtype=np.float64)
+
+    # ── residual: dp/dt with normalization constraint at index 0 ────────────
+    # jax_mlfe_vector_field_vmap computes Q(p)^T p (the ODE rhs).
+    # We replace row 0 with  sum(p) - 1 = 0  to fix the normalisation and
+    # break the degeneracy of Q^T (whose null space has dimension ≥ 1).
+    def residual(p_np: np.ndarray) -> np.ndarray:
+        p = jnp.array(p_np, dtype=jnp.float32)
+        r = np.array(jax_mlfe_vector_field_vmap(0.0, p, static_args), dtype=np.float64)
+        r[0] = float(np.sum(p_np)) - 1.0
+        return r
+
+    # ── solve ────────────────────────────────────────────────────────────────
+    # epsfcn sets the finite-difference step for Jacobian estimation.
+    # Default (≈1.5e-8) is below float32's noise floor (≈1.2e-7), producing
+    # a noisy numerical Jacobian.  1e-4 gives a step well above the noise floor.
+    if verbose:
+        print('**** Solving for stationary distribution ****')
+
+    p_star, _info, ier, msg = fsolve(residual, y0, full_output=True, xtol=tol, epsfcn=1e-4)
+
+    if verbose and ier != 1:
+        print(f'  Warning: fsolve convergence flag {ier}: {msg}')
+
+    p_star = np.maximum(p_star, 0.0)
+    p_star /= p_star.sum()
+
+    return p_star, index_to_ode_state_space
 
 
 # Deprecated
