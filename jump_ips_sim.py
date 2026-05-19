@@ -137,17 +137,6 @@ def simulate_jump_process(
 
         entity, source_state, target_state = possible_transitions[transition_index]
 
-        # The state change of 'node' affects the neighborhood of 'node' and all its neighbors
-        if meas is not None:
-            affected_nodes = [node] + list(ips.graph.neighbors(node))
-            
-            # Remove contributions from old state
-            for v in affected_nodes:
-                old_nb = ips.get_neighborhood(v, current_vertex_state)
-                meas[old_nb] = meas.get(old_nb, 0.0) - 1.0 / ips.num_particles
-                if meas[old_nb] <= 1e-12:
-                    del meas[old_nb]
-
         # Update state
         if isinstance(entity, tuple):
             edge = tuple(sorted(entity))
@@ -155,14 +144,22 @@ def simulate_jump_process(
             edge_jumps.append((edge, current_time, (source_state, target_state)))
         else:
             node = entity
+            affected_nodes = [node] + list(ips.graph.neighbors(node))
+
+            if meas is not None:
+                for v in affected_nodes:
+                    old_nb = ips.get_neighborhood(v, current_vertex_state)
+                    meas[old_nb] = meas.get(old_nb, 0.0) - 1.0 / ips.num_particles
+                    if meas[old_nb] <= 1e-12:
+                        del meas[old_nb]
+
             current_vertex_state[node] = target_state
             jumps.append((node, current_time, (source_state, target_state)))
 
-        # Add contributions from new state
-        if meas is not None:
-            for v in affected_nodes:
-                new_nb = ips.get_neighborhood(v, current_vertex_state)
-                meas[new_nb] = meas.get(new_nb, 0.0) + 1.0 / ips.num_particles
+            if meas is not None:
+                for v in affected_nodes:
+                    new_nb = ips.get_neighborhood(v, current_vertex_state)
+                    meas[new_nb] = meas.get(new_nb, 0.0) + 1.0 / ips.num_particles
 
     if verbose:
         print(f'completed simulation in {np.datetime64("now") - start_time} seconds.')
