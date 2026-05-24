@@ -457,9 +457,9 @@ def find_stationary_distribution(
         rate_caller = make_rate_caller(
             ips.rate,
             rate_params,
-            ips.vertex_type_space is not None,
-            ips.edge_type_space is not None,
-            ips.edge_state_space is not None,
+            # ips.vertex_type_space is not None,
+            # ips.edge_type_space is not None,
+            # ips.edge_state_space is not None,
         )
     static_args["rate_caller"] = rate_caller
 
@@ -521,9 +521,6 @@ def find_stationary_distribution(
 
     if verbose and ier != 1:
         print(f'  Warning: fsolve convergence flag {ier}: {msg}')
-
-    p_star = np.maximum(p_star, 0.0)
-    p_star /= p_star.sum()
 
     return p_star, index_to_ode_state_space
 
