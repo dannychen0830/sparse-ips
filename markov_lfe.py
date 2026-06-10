@@ -201,7 +201,8 @@ def simulate_markov_lfe(
         verbose: bool = True,
         static_args: dict[str, jnp.ndarray] = None,
         sparse_indices: jnp.ndarray = None,
-        rate_caller: callable = None
+        rate_caller: callable = None,
+        throw: bool = True,
 ) -> tuple[np.ndarray, np.ndarray, dict[int, tuple[any]]]:
     # step up ode state space
     deg_dist = ips.deg_dist
@@ -344,8 +345,15 @@ def simulate_markov_lfe(
         stepsize_controller=step_controller,
         saveat=saveat,
         max_steps=100000,
+        throw=throw,
         progress_meter=diffrax.TqdmProgressMeter() if verbose else diffrax.NoProgressMeter(),
     )
+
+    if not throw and sol.result != diffrax.RESULTS.successful:
+        valid_ts = sol.ts[~jnp.isinf(sol.ts)]
+        last_t = float(valid_ts.max()) if len(valid_ts) > 0 else 0.0
+        print(f'  Warning: LFE solver did not converge (result={sol.result}); '
+              f'partial solution up to t={last_t:.3g} / {max_time}')
 
     return sol.ts, sol.ys.transpose(), index_to_ode_state_space
 
