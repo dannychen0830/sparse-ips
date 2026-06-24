@@ -30,13 +30,7 @@ class ParticleSystem:
         if self.deg_dist is None:
             self.deg_dist = self.get_empirical_degree_distribution()
         self.deg_supp = [i for (i, p) in self.deg_dist.items() if p > 0]
-        self.neighborhood_state_space = [
-            (root,) + children
-            for k in self.deg_supp
-            for (root, children) in product(
-                self.state_space, product(self.state_space, repeat=k)
-            )
-        ]
+        self._neighborhood_state_space = None  # built lazily on first access
 
         self.vertex_type_space = vertex_type_space
         self.vertex_type = vertex_type
@@ -65,6 +59,18 @@ class ParticleSystem:
             {s: i for i, s in enumerate(edge_state_space)}
             if edge_state_space else {}
         )
+
+    @property
+    def neighborhood_state_space(self):
+        if self._neighborhood_state_space is None:
+            self._neighborhood_state_space = [
+                (root,) + children
+                for k in self.deg_supp
+                for (root, children) in product(
+                    self.state_space, product(self.state_space, repeat=k)
+                )
+            ]
+        return self._neighborhood_state_space
 
     @abstractmethod
     def rate(self,
