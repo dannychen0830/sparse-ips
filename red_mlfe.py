@@ -71,6 +71,7 @@ def simulate_red_mlfe(
         step_control: str = 'adaptive',
         verbose: bool = True,
         throw: bool = True,
+        return_per_type: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, dict]:
     """
     Simulate the Reduced Local-Field Equation (RLFE) from Theorem 2.12.
@@ -356,6 +357,12 @@ def simulate_red_mlfe(
         prob[1:, :] += np.einsum('r,a,trac->ct', pi, p0[1:], Pa_t)
 
     index_to_state = {i: s for i, s in enumerate(state_space)}
+    if return_per_type:
+        # prob_per_type[r, c, t] = P(state = c | type = r) at each time step
+        prob_per_type = p0[0] * np.einsum('k,trkc->rct', theta_k, P0_t)  # (n_tau, n, nt)
+        if m > 0:
+            prob_per_type[:, 1:, :] += np.einsum('a,trac->rct', p0[1:], Pa_t)
+        return np.array(sol.ts), prob, prob_per_type, index_to_state
     return np.array(sol.ts), prob, index_to_state
 
 
