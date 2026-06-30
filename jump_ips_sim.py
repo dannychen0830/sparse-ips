@@ -10,6 +10,7 @@ def simulate_jump_process(
     seed: int = None,
     verbose: bool = False,
     edge_initial_conditions: dict[tuple[int,int],any] = None,
+    return_edge_jumps: bool = False,
 ) -> list[tuple[int, float, tuple[any, any]]]:
     """
     Simulate interacting particles on a graph as a continuous-time Markov chain.
@@ -164,6 +165,8 @@ def simulate_jump_process(
     if verbose:
         print(f'completed simulation in {np.datetime64("now") - start_time} seconds.')
 
+    if return_edge_jumps:
+        return jumps, edge_jumps
     return jumps
 
 
