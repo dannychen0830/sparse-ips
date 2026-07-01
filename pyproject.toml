@@ -1,0 +1,28 @@
+[build-system]
+requires = [
+    "setuptools>=42",
+    "wheel"
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sparseips"
+version = "0.1.0"
+description = "Simulating interacting stochastic processes on (primarily) sparse graphs."
+dependencies = [
+    "diffrax",
+    "jax",
+    "joblib",
+    "lineax",
+    "matplotlib",
+    "networkx",
+    "numpy",
+    "optax",
+    "optimistix"
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
