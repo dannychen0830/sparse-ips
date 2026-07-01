@@ -1,6 +1,73 @@
 import numpy as np
+import jax.numpy as jnp
 from sparseips.ips_class import *
+from sparseips.jax_mlfe import make_rate_caller
 from joblib import Parallel, delayed # use this to parallelize also in jupyter notebooks
+
+
+def prepare_batch_vertex_rate_inputs(ips, structure):
+    """
+    Precompute the parts of the flattened (node, target_state) rate-grid
+    inputs that don't depend on the current particle configuration -- the
+    target-state and type-mark arrays are the same for every event in a
+    simulation run, so tiling/repeating them once here (instead of inside the
+    per-event hot loop) avoids redoing that work on every single jump.
+    """
+    num_states = len(ips.state_space)
+
+    marks_flat = {}
+    if structure['vertex_types'] is not None:
+        marks_flat['vertex_types'] = jnp.repeat(
+            jnp.asarray(structure['vertex_types']), num_states, axis=0
+        )
+    if structure['edge_types'] is not None:
+        marks_flat['edge_types'] = jnp.repeat(
+            jnp.asarray(structure['edge_types']), num_states, axis=0
+        )
+
+    return {
+        'num_states': num_states,
+        'neighbor_idx': jnp.asarray(structure['neighbor_node_idx']),
+        'tgt_flat': jnp.tile(jnp.arange(num_states, dtype=jnp.int32), ips.num_particles),
+        'marks_flat': marks_flat,
+    }
+
+
+def batch_vertex_rates(state_idx_arr, t, meas_array, rate_caller, prepared):
+    """
+    Evaluate ips.rate() for every (node, candidate target state) pair in a
+    single vmapped JIT call instead of one Python-level call per node.
+
+    This replaces the inner double loop in simulate_jump_process (over nodes,
+    then over target states) for models without dynamic edge state, which
+    dominates the simulation cost: each event previously dispatched
+    num_particles * (|state_space| - 1) separate jitted scalar calls, each
+    paying its own Python/JAX dispatch overhead, even though only the rates of
+    the jumped node and its neighbours actually changed since the last event.
+    Batching them into one call removes that per-call overhead; it does not
+    (yet) avoid recomputing rates for unaffected nodes.
+
+    Returns an (num_particles, |state_space|) numpy array of rates, with
+    rates[:, src] (i.e. target == current state) forced to zero.
+    """
+    num_states = prepared['num_states']
+    tgt_flat = prepared['tgt_flat']
+
+    state_idx_jnp = jnp.asarray(state_idx_arr)
+    neighbor_idx = prepared['neighbor_idx']
+    neighbor_states = jnp.where(
+        neighbor_idx >= 0, state_idx_jnp[jnp.clip(neighbor_idx, 0)], -1
+    )
+
+    # Flatten the (node, target_state) grid into one axis so the whole grid
+    # is computed by a single vmapped call.
+    src_flat = jnp.repeat(state_idx_jnp, num_states)
+    neighbors_flat = jnp.repeat(neighbor_states, num_states, axis=0)
+
+    meas = jnp.asarray(meas_array) if meas_array is not None else None
+    rates = rate_caller(src_flat, tgt_flat, neighbors_flat, prepared['marks_flat'], meas, t)
+    rates = jnp.where(src_flat == tgt_flat, 0.0, rates)
+    return np.asarray(rates).reshape(state_idx_arr.shape[0], num_states)
 
 
 def simulate_jump_process(
@@ -61,32 +128,62 @@ def simulate_jump_process(
     jumps = []
     edge_jumps = []
 
+    # Vertex rates can be evaluated for every (node, target_state) pair in one
+    # vmapped call as long as no per-edge dynamic state needs to be gathered
+    # fresh each event (edge_state_space models fall back to the per-node loop
+    # below, since that gather isn't vectorized here).
+    use_batched_vertex_rates = ips.edge_state_space is None
+    if use_batched_vertex_rates:
+        rate_caller = make_rate_caller(ips.rate, ips.params)
+        batch_structure = ips.get_batch_neighbor_structure()
+        prepared_batch_inputs = prepare_batch_vertex_rate_inputs(ips, batch_structure)
+        state_idx_arr = np.array(
+            [ips._state_to_idx[current_vertex_state[node]] for node in range(ips.num_particles)],
+            dtype=np.int32,
+        )
+
     while current_time < max_time:
         # Calculate rates for all possible transitions
         possible_transitions = []
         rates = []
- 
-        for node in ips.graph.nodes():
-            current_node_state = current_vertex_state[node]
 
-            # Consider all possible target states for this node
-            for target_state in ips.state_space:
-                if target_state != current_node_state:
-                    transition_rate = ips.sim_rate(
-                        node=node,
-                        source_state=current_node_state,
-                        target_state=target_state,
-                        current_config=current_vertex_state,
-                        t=current_time,
-                        meas=meas,
-                        current_edge_state=current_edge_state,
-                    )
+        if use_batched_vertex_rates:
+            meas_array = None
+            if ips.global_interaction:
+                meas_array = np.array(
+                    [meas.get(s, 0.0) for s in ips.neighborhood_state_space], dtype=np.float32
+                )
+            rates_grid = batch_vertex_rates(
+                state_idx_arr, current_time, meas_array, rate_caller, prepared_batch_inputs
+            )
+            jump_nodes, jump_targets = np.nonzero(rates_grid > 0)
+            for node, tgt_idx in zip(jump_nodes, jump_targets):
+                possible_transitions.append(
+                    (int(node), ips.state_space[state_idx_arr[node]], ips.state_space[tgt_idx])
+                )
+                rates.append(float(rates_grid[node, tgt_idx]))
+        else:
+            for node in ips.graph.nodes():
+                current_node_state = current_vertex_state[node]
 
-                    if transition_rate > 0:
-                        possible_transitions.append(
-                            (node, current_node_state, target_state)
+                # Consider all possible target states for this node
+                for target_state in ips.state_space:
+                    if target_state != current_node_state:
+                        transition_rate = ips.sim_rate(
+                            node=node,
+                            source_state=current_node_state,
+                            target_state=target_state,
+                            current_config=current_vertex_state,
+                            t=current_time,
+                            meas=meas,
+                            current_edge_state=current_edge_state,
                         )
-                        rates.append(transition_rate)
+
+                        if transition_rate > 0:
+                            possible_transitions.append(
+                                (node, current_node_state, target_state)
+                            )
+                            rates.append(transition_rate)
 
         # if available, add the edge weight dynamics
         if ips.edge_rate is not None:
@@ -156,6 +253,9 @@ def simulate_jump_process(
 
             current_vertex_state[node] = target_state
             jumps.append((node, current_time, (source_state, target_state)))
+
+            if use_batched_vertex_rates:
+                state_idx_arr[node] = ips._state_to_idx[target_state]
 
             if meas is not None:
                 for v in affected_nodes:

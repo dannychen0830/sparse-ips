@@ -31,6 +31,7 @@ class ParticleSystem:
             self.deg_dist = self.get_empirical_degree_distribution()
         self.deg_supp = [i for (i, p) in self.deg_dist.items() if p > 0]
         self._neighborhood_state_space = None  # built lazily on first access
+        self._batch_neighbor_structure = None  # built lazily on first access
 
         self.vertex_type_space = vertex_type_space
         self.vertex_type = vertex_type
@@ -71,6 +72,60 @@ class ParticleSystem:
                 )
             ]
         return self._neighborhood_state_space
+
+    def get_batch_neighbor_structure(self):
+        """
+        Precompute the graph-topology data needed to evaluate every node's
+        rate() in one vmapped call instead of one Python-level call per node.
+        Only depends on the graph and the (static, per-simulation) vertex/edge
+        type assignments, so it is built once and cached; see renew_graph(),
+        which invalidates the cache when the topology changes.
+
+        Returns a dict of plain numpy arrays (deliberately not jnp arrays, so
+        the cache stays picklable across joblib worker processes):
+          'neighbor_node_idx' : (N, max_deg) int32, -1-padded neighbor ids
+          'vertex_types'      : (N, 1+max_deg) int32 or None, -1-padded;
+                                 column 0 is the node's own type, matching the
+                                 [root_type, *neighbour_types] convention used
+                                 by sim_rate()/rate()
+          'edge_types'        : (N, max_deg) int32 or None, -1-padded
+        """
+        if self._batch_neighbor_structure is not None:
+            return self._batch_neighbor_structure
+
+        N = self.num_particles
+        max_deg = max((d for _, d in self.graph.degree()), default=0)
+
+        neighbor_node_idx = np.full((N, max_deg), -1, dtype=np.int32)
+        neighbor_lists = [list(self.graph.neighbors(node)) for node in range(N)]
+        for node, nbrs in enumerate(neighbor_lists):
+            neighbor_node_idx[node, :len(nbrs)] = nbrs
+
+        vertex_types = None
+        if self.vertex_type is not None:
+            own = np.array(
+                [self._vtype_to_idx[self.vertex_type[node]] for node in range(N)],
+                dtype=np.int32,
+            )
+            nbr = np.full((N, max_deg), -1, dtype=np.int32)
+            for node, nbrs in enumerate(neighbor_lists):
+                nbr[node, :len(nbrs)] = [self._vtype_to_idx[self.vertex_type[n]] for n in nbrs]
+            vertex_types = np.concatenate([own[:, None], nbr], axis=1)
+
+        edge_types = None
+        if self.edge_type is not None:
+            edge_types = np.full((N, max_deg), -1, dtype=np.int32)
+            for node, nbrs in enumerate(neighbor_lists):
+                edge_types[node, :len(nbrs)] = [
+                    self._etype_to_idx[self.edge_type[tuple(sorted((node, n)))]] for n in nbrs
+                ]
+
+        self._batch_neighbor_structure = {
+            'neighbor_node_idx': neighbor_node_idx,
+            'vertex_types': vertex_types,
+            'edge_types': edge_types,
+        }
+        return self._batch_neighbor_structure
 
     @abstractmethod
     def rate(self,
@@ -164,6 +219,7 @@ class ParticleSystem:
         self.graph = ParticleSystem.sample_graph_from_deg_dist(
             self.deg_dist, self.num_particles, seed
         )
+        self._batch_neighbor_structure = None  # topology changed; rebuild lazily
 
         # renew vertex type
         if self.vertex_type is not None:
